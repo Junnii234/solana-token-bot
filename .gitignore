@@ -1,0 +1,27 @@
+# Environment variables (never commit)
+.env
+.env.local
+.env.*.local
+
+# Node modules
+node_modules/
+package-lock.json
+npm-debug.log*
+
+# Processed tokens storage
+processed_tokens.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
