@@ -1,14 +1,17 @@
 {
-  "name": "bot",
+  "name": "solana-token-bot",
   "version": "1.0.0",
-  "description": "Solana launchpad monitor",
+  "description": "Solana Token Hunter Bot",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js"
   },
   "dependencies": {
-    "@solana/web3.js": "^1.91.0",
-    "node-telegram-bot-api": "^0.65.0",
-    "axios": "^1.6.2"
+    "node-telegram-bot-api": "^0.63.0",
+    "axios": "^1.6.0",
+    "dotenv": "^16.3.1"
+  },
+  "engines": {
+    "node": "18.x"
   }
 }
