@@ -3,7 +3,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const fs = require('fs');
 
-console.log('🚀 GMGN TOKEN HUNTER BOT - Real Solana Token Discovery\n');
+console.log('🚀 GMGN TOKEN HUNTER BOT - Low Filter Version\n');
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || '';
@@ -17,10 +17,14 @@ const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
 let processed = new Set();
 let lastAlertTime = {};
 
+// FILTER SETTINGS - Adjust these to get more/fewer alerts
+const MIN_LIQUIDITY = 1000;    // $1K minimum (was $5K)
+const MIN_VOLUME = 100;         // $100 minimum (was $500)
+
 async function sendAlert(msg) {
   try {
     await bot.sendMessage(TELEGRAM_CHAT_ID, msg, { parse_mode: 'HTML', disable_web_page_preview: true });
-    console.log('✉️  ✅ ALERT SENT TO TELEGRAM!');
+    console.log('✉️  ✅ ALERT SENT!');
     return true;
   } catch (e) {
     console.error('❌ Telegram error:', e.message.split('\n')[0]);
@@ -30,13 +34,11 @@ async function sendAlert(msg) {
 
 async function scanGMGNTokens() {
   try {
-    console.log('\n🔍 [GMGN] Scanning Solana for NEW hot tokens...');
+    console.log('\n🔍 [GMGN] Scanning for hot tokens...');
 
     const res = await axios.get('https://gmgn.ai/api/v1/tokens/solana/hot?limit=20&order=latest', {
       timeout: 8000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0'
-      }
+      headers: { 'User-Agent': 'Mozilla/5.0' }
     }).catch(async (err) => {
       console.log(`   Trying alternative endpoint...`);
       return await axios.get('https://api.gmgn.ai/api/v1/tokens/hot', {
@@ -47,7 +49,7 @@ async function scanGMGNTokens() {
 
     if (!res?.data) {
       console.log('   ❌ GMGN API not responding');
-      console.log('   📋 Falling back to GeckoTerminal...');
+      console.log('   📋 Trying fallback...');
       return await fallbackGeckoTerminal();
     }
 
@@ -59,12 +61,24 @@ async function scanGMGNTokens() {
       return;
     }
 
-    console.log(`   ✅ Found ${tokenList.length} hot tokens!\n`);
+    console.log(`   ✅ Got ${tokenList.length} pools\n`);
 
-    for (const token of tokenList.slice(0, 5)) {
+    let passed = 0;
+    let filtered = 0;
+    let skipped = 0;
+
+    for (const token of tokenList.slice(0, 10)) {
       const mint = token.mint || token.address || token.token_address;
       
-      if (!mint || processed.has(mint)) {
+      if (!mint) {
+        console.log(`   ⏭️  No mint - skip`);
+        filtered++;
+        continue;
+      }
+
+      if (processed.has(mint)) {
+        console.log(`   ⏭️  Already seen: ${token.symbol || '?'}`);
+        skipped++;
         continue;
       }
 
@@ -76,31 +90,63 @@ async function scanGMGNTokens() {
       const priceChange = token.price_change_24h || token.price_change || 0;
 
       console.log(`   📊 ${symbol}`);
-      console.log(`      Name: ${name}`);
-      console.log(`      Liquidity: $${(liq / 1000).toFixed(1)}K`);
-      console.log(`      Volume 24h: $${(vol24h / 1000).toFixed(1)}K`);
+      console.log(`      Liq: $${(liq / 1000).toFixed(1)}K | Vol: $${(vol24h / 1000).toFixed(1)}K`);
 
-      if (liq < 5000 || vol24h < 500) {
-        console.log(`      ⏭️  Low metrics - skip\n`);
+      // CHECK FILTERS
+      if (liq < MIN_LIQUIDITY) {
+        console.log(`      ❌ Liquidity too low ($${(liq / 1000).toFixed(1)}K < $${MIN_LIQUIDITY / 1000}K)`);
         processed.add(mint);
+        filtered++;
         continue;
       }
 
+      if (vol24h < MIN_VOLUME) {
+        console.log(`      ❌ Volume too low ($${(vol24h / 1000).toFixed(1)}K < $${MIN_VOLUME / 1000}K)`);
+        processed.add(mint);
+        filtered++;
+        continue;
+      }
+
+      // Check already alerted
       if (lastAlertTime[mint] && (Date.now() - lastAlertTime[mint]) < 3600000) {
-        console.log(`      ⏭️  Already alerted - skip\n`);
+        console.log(`      ⏭️  Alerted recently`);
+        skipped++;
         continue;
       }
 
+      // PASSED ALL FILTERS - SEND ALERT!
       processed.add(mint);
       lastAlertTime[mint] = Date.now();
+      passed++;
       
-      console.log(`      ✅ SENDING ALERT!\n`);
+      console.log(`      ✅ PASSED - SENDING ALERT!\n`);
 
-      const msg = `🔥 <b>GMGN - HOT SOLANA TOKEN 🔥</b>\n\n<b>${name}</b> (${symbol})\nMint: <code>${mint}</code>\n\n📊 <b>24h METRICS:</b>\n• Liquidity: $${(liq / 1000).toFixed(1)}K\n• Volume: $${(vol24h / 1000).toFixed(1)}K\n• Holders: ${holders}\n• Price Change: ${priceChange > 0 ? '📈' : '📉'} ${Math.abs(priceChange).toFixed(1)}%\n\n🚀 <b>HOT TOKEN ALERT!</b>\n\n🔗 <a href="https://gmgn.ai/sol/token/${mint}">GMGN</a> | <a href="https://dexscreener.com/solana/${mint}">DexScreener</a>`;
+      const msg = `🔥 <b>NEW HOT TOKEN 🔥</b>
+
+<b>🟡 SOLANA</b>
+
+<b>${name}</b> (${symbol})
+Mint: <code>${mint}</code>
+
+📊 <b>Metrics:</b>
+• Liquidity: $${(liq / 1000).toFixed(1)}K
+• Volume 24h: $${(vol24h / 1000).toFixed(1)}K
+• Holders: ${holders}
+• Price 24h: ${priceChange > 0 ? '📈' : '📉'} ${Math.abs(priceChange).toFixed(1)}%
+
+🚀 <b>HOT OPPORTUNITY!</b>
+
+🔗 <a href="https://gmgn.ai/sol/token/${mint}">GMGN</a> | <a href="https://dexscreener.com/solana/${mint}">DexScreener</a> | <a href="https://solscan.io/token/${mint}">Solscan</a>`;
 
       await sendAlert(msg);
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, 1500));
     }
+
+    console.log(`\n   📊 Scan Summary:`);
+    console.log(`      ✅ Passed: ${passed}`);
+    console.log(`      ❌ Filtered out: ${filtered}`);
+    console.log(`      ⏭️  Already seen: ${skipped}`);
+
   } catch (e) {
     console.log(`   ❌ Error: ${e.message.split('\n')[0]}`);
   }
@@ -108,7 +154,7 @@ async function scanGMGNTokens() {
 
 async function fallbackGeckoTerminal() {
   try {
-    console.log('\n   🔄 [GeckoTerminal Fallback] Scanning...');
+    console.log('\n   🔄 [GeckoTerminal] Scanning...');
 
     const res = await axios.get('https://api.geckoterminal.com/api/v2/networks/solana/pools?order=h24_transaction_count_desc&limit=20', {
       timeout: 8000,
@@ -116,30 +162,45 @@ async function fallbackGeckoTerminal() {
     }).catch(() => null);
 
     if (!res?.data?.data) {
-      console.log('   ❌ Fallback also failed');
+      console.log('   ❌ No data');
       return;
     }
 
-    console.log(`   ✅ Fallback working! Got ${res.data.data.length} pools\n`);
+    console.log(`   ✅ Got ${res.data.data.length} pools\n`);
 
-    for (const pool of res.data.data.slice(0, 3)) {
+    let passed = 0;
+    let filtered = 0;
+
+    for (const pool of res.data.data.slice(0, 10)) {
       const baseToken = pool.tokens?.[0];
-      if (!baseToken || processed.has(baseToken.address)) continue;
+      if (!baseToken || processed.has(baseToken.address)) {
+        filtered++;
+        continue;
+      }
 
       const liq = parseFloat(pool.reserve_in_usd) || 0;
-      if (liq < 5000) {
+      const symbol = baseToken.symbol || '?';
+
+      console.log(`   📊 ${symbol} - $${(liq / 1000).toFixed(1)}K`);
+
+      if (liq < MIN_LIQUIDITY) {
+        console.log(`      ❌ Too low`);
         processed.add(baseToken.address);
+        filtered++;
         continue;
       }
 
       processed.add(baseToken.address);
+      passed++;
 
-      const msg = `🟢 <b>NEW TOKEN</b>\n\n<b>${baseToken.name}</b> (${baseToken.symbol})\nLiquidity: $${(liq / 1000).toFixed(1)}K`;
+      const msg = `🟢 <b>NEW TOKEN</b>\n\n<b>${baseToken.name}</b> (${symbol})\nLiquidity: $${(liq / 1000).toFixed(1)}K`;
       await sendAlert(msg);
-      await new Promise(r => setTimeout(r, 1500));
+      await new Promise(r => setTimeout(r, 1000));
     }
+
+    console.log(`\n   📊 GeckoTerminal Summary: ${passed} passed, ${filtered} filtered`);
   } catch (e) {
-    console.log(`   ❌ Fallback error: ${e.message.split('\n')[0]}`);
+    console.log(`   ❌ Error: ${e.message.split('\n')[0]}`);
   }
 }
 
@@ -151,14 +212,16 @@ async function startup() {
     }
   } catch (e) {}
 
-  console.log('\n✅ GMGN TOKEN HUNTER BOT ONLINE\n');
+  console.log('\n✅ GMGN BOT ONLINE - LOW FILTER MODE\n');
   console.log('🔥 Primary: GMGN API');
-  console.log('📋 Fallback: GeckoTerminal\n');
+  console.log('📋 Fallback: GeckoTerminal');
+  console.log(`🎯 Min Liquidity: $${MIN_LIQUIDITY / 1000}K`);
+  console.log(`🎯 Min Volume: $${MIN_VOLUME / 1000}K\n`);
 
   try {
-    await sendAlert('🔥 <b>GMGN BOT ONLINE!</b>\n✅ Scanning Solana\n✅ Hot token alerts\n\n🎯 Hunting begins!');
+    await sendAlert(`🔥 <b>BOT ONLINE!</b>\n\n✅ GMGN Scanner\n✅ Low filters = More alerts\n✅ Min Liq: $${MIN_LIQUIDITY / 1000}K\n✅ Min Vol: $${MIN_VOLUME / 1000}K\n\n🎯 Hunting!`);
   } catch (e) {
-    console.error('⚠️  Telegram connection issue');
+    console.error('⚠️  Telegram issue');
   }
 
   console.log('⏰ Starting scans...\n');
