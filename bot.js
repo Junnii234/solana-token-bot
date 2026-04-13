@@ -1,8 +1,9 @@
+require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const fs = require('fs');
 
-console.log('🚀 HYBRID BOT - Real Data + Mock Data Fallback\n');
+console.log('🚀 GMGN TOKEN HUNTER BOT - Real Solana Token Discovery\n');
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || '';
@@ -13,285 +14,170 @@ if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) {
 }
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
-
 let processed = new Set();
-let apiWorking = false;
-
-async function saveProcessed() {
-  try {
-    fs.writeFileSync('processed.json', JSON.stringify({
-      processed: Array.from(processed),
-    }));
-  } catch (e) {}
-}
-
-function loadProcessed() {
-  try {
-    if (fs.existsSync('processed.json')) {
-      const data = JSON.parse(fs.readFileSync('processed.json', 'utf8'));
-      processed = new Set(data.processed || []);
-    }
-  } catch (e) {}
-}
+let lastAlertTime = {};
 
 async function sendAlert(msg) {
   try {
     await bot.sendMessage(TELEGRAM_CHAT_ID, msg, { parse_mode: 'HTML', disable_web_page_preview: true });
-    console.log('✉️  Alert sent');
+    console.log('✉️  ✅ ALERT SENT TO TELEGRAM!');
+    return true;
   } catch (e) {
-    console.error('Alert error:', e.message);
+    console.error('❌ Telegram error:', e.message.split('\n')[0]);
+    return false;
   }
 }
 
-// ==================== MOCK DATA (For Testing) ====================
-
-const mockTokens = [
-  {
-    baseToken: { symbol: 'BONK', name: 'Bonk', address: 'DezXAZ8z7PnrnRJjz3wXBoQskzUSKgzpCkm1kecjwKJ' },
-    liquidity: { usd: 8500000 },
-    marketCap: 150000000,
-    priceChange: { m5: 5.2 }
-  },
-  {
-    baseToken: { symbol: 'COPE', name: 'Cope', address: 'WCKXwbvN2bn4Vg1YhAXT5d4czfP2YOZST3JAKcKqDEP' },
-    liquidity: { usd: 2500000 },
-    marketCap: 45000000,
-    priceChange: { m5: -2.1 }
-  },
-  {
-    baseToken: { symbol: 'ORCA', name: 'Orca', address: 'orcaEKTdK7LKz57chYcSKdWe8rDsw7JkSsCo7bfqjGo' },
-    liquidity: { usd: 5200000 },
-    marketCap: 98000000,
-    priceChange: { m5: 1.8 }
-  },
-  {
-    baseToken: { symbol: 'FROG', name: 'Frog', address: 'FROGkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk' },
-    liquidity: { usd: 350000 },
-    marketCap: 6500000,
-    priceChange: { m5: 12.5 }
-  },
-  {
-    baseToken: { symbol: 'MEOW', name: 'Meow Cat', address: 'MEOWkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk' },
-    liquidity: { usd: 1800000 },
-    marketCap: 32000000,
-    priceChange: { m5: 3.2 }
-  },
-];
-
-let mockIndex = 0;
-
-function getNextMockToken() {
-  const token = mockTokens[mockIndex];
-  mockIndex = (mockIndex + 1) % mockTokens.length;
-  return token;
-}
-
-// ==================== REAL API ====================
-
-async function fetchRealTokens() {
+async function scanGMGNTokens() {
   try {
-    console.log('   🔄 Trying real DexScreener API...');
+    console.log('\n🔍 [GMGN] Scanning Solana for NEW hot tokens...');
 
-    // Try different endpoint formats
-    const endpoints = [
-      'https://api.dexscreener.com/latest/dex/pairs/solana?limit=50',
-      'https://api.dexscreener.com/latest/dex/pairs/solana',
-      'https://api.dexscreener.com/dex/pairs/solana',
-    ];
-
-    for (const endpoint of endpoints) {
-      try {
-        const res = await axios.get(endpoint, {
-          timeout: 8000,
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'application/json',
-          }
-        });
-
-        if (res.data && res.data.pairs && res.data.pairs.length > 0) {
-          console.log(`   ✅ Real API working! Got ${res.data.pairs.length} pairs`);
-          apiWorking = true;
-          return res.data.pairs;
-        }
-      } catch (e) {
-        console.log(`   ⚠️  Endpoint failed: ${e.message.split('\n')[0]}`);
+    const res = await axios.get('https://gmgn.ai/api/v1/tokens/solana/hot?limit=20&order=latest', {
+      timeout: 8000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0'
       }
+    }).catch(async (err) => {
+      console.log(`   Trying alternative endpoint...`);
+      return await axios.get('https://api.gmgn.ai/api/v1/tokens/hot', {
+        timeout: 8000,
+        headers: { 'User-Agent': 'Mozilla/5.0' }
+      }).catch(() => null);
+    });
+
+    if (!res?.data) {
+      console.log('   ❌ GMGN API not responding');
+      console.log('   📋 Falling back to GeckoTerminal...');
+      return await fallbackGeckoTerminal();
     }
 
-    console.log('   ❌ Real API not responding, using mock data...');
-    apiWorking = false;
-    return null;
-  } catch (e) {
-    console.log('   ❌ Real API error:', e.message.split('\n')[0]);
-    return null;
-  }
-}
+    const tokens = res.data.data || res.data.tokens || res.data;
+    const tokenList = Array.isArray(tokens) ? tokens : [];
 
-// ==================== ANALYZE TOKEN ====================
-
-function analyze8Layers(token) {
-  const analysis = {
-    passed: [],
-    warnings: [],
-    failed: [],
-    safeScore: 100,
-  };
-
-  analysis.passed.push('✅ Supply verified');
-  analysis.passed.push('✅ Community verified');
-
-  const liq = token.liquidity?.usd || 0;
-  if (liq > 50000) {
-    analysis.passed.push(`✅ Strong liquidity $${(liq / 1000).toFixed(1)}K`);
-  } else if (liq > 5000) {
-    analysis.passed.push(`✅ Liquidity $${(liq / 1000).toFixed(1)}K`);
-  } else {
-    analysis.failed.push(`❌ Low liquidity $${(liq / 1000).toFixed(0)}`);
-    analysis.safeScore -= 20;
-  }
-
-  return analysis;
-}
-
-// ==================== SCAN TOKENS ====================
-
-async function scanTokens() {
-  try {
-    console.log('\n🔍 Scanning tokens...');
-
-    // Try real API first
-    let tokens = await fetchRealTokens();
-
-    // Use mock data if real API fails
-    if (!tokens || tokens.length === 0) {
-      console.log('   📋 Using demo data (mock tokens)');
-      tokens = [getNextMockToken(), getNextMockToken()];
+    if (tokenList.length === 0) {
+      console.log('   ❌ No tokens found');
+      return;
     }
 
-    let newCount = 0;
-    let rejectedCount = 0;
+    console.log(`   ✅ Found ${tokenList.length} hot tokens!\n`);
 
-    for (const token of tokens.slice(0, 3)) {
-      if (!token.baseToken) continue;
-
-      const tokenId = token.baseToken.address;
-
-      if (processed.has(tokenId)) {
-        console.log(`   ⏭️  Skip (seen): ${token.baseToken.symbol}`);
+    for (const token of tokenList.slice(0, 5)) {
+      const mint = token.mint || token.address || token.token_address;
+      
+      if (!mint || processed.has(mint)) {
         continue;
       }
 
-      const liq = token.liquidity?.usd || 0;
-      const mcap = token.marketCap || 0;
-      const change = token.priceChange?.m5 || 0;
+      const symbol = token.symbol || token.token_symbol || '?';
+      const name = token.name || token.token_name || '?';
+      const liq = token.liquidity || token.usd_liquidity || 0;
+      const vol24h = token.volume_24h || token.trading_volume || 0;
+      const holders = token.holder_count || token.holders || '?';
+      const priceChange = token.price_change_24h || token.price_change || 0;
 
-      console.log(`\n   📊 ${token.baseToken.symbol}`);
-      console.log(`      Liq: $${(liq / 1000).toFixed(1)}K | Cap: $${(mcap / 1000).toFixed(1)}K | 5m: ${change > 0 ? '📈' : '📉'} ${Math.abs(change).toFixed(1)}%`);
+      console.log(`   📊 ${symbol}`);
+      console.log(`      Name: ${name}`);
+      console.log(`      Liquidity: $${(liq / 1000).toFixed(1)}K`);
+      console.log(`      Volume 24h: $${(vol24h / 1000).toFixed(1)}K`);
 
-      // Filter
-      if (liq < 1000) {
-        console.log(`      ❌ Low liquidity - rejected`);
-        processed.add(tokenId);
-        saveProcessed();
-        rejectedCount++;
-
-        const msg = `⚠️ <b>TOKEN - REJECTED</b> ⚠️
-
-<b>🚫 SKIPPED (Failed Filters)</b>
-
-<b>${token.baseToken.name}</b> (${token.baseToken.symbol})
-
-💰 <b>Data:</b>
-• Liquidity: $${(liq / 1000).toFixed(1)}K (need $1K+)
-• Market Cap: $${(mcap / 1000).toFixed(1)}K
-• 5min: ${change > 0 ? '📈' : '📉'} ${Math.abs(change).toFixed(1)}%
-
-<b>Safety Score: 60/100</b>
-
-🔴 NOT ALERTED`;
-
-        await sendAlert(msg);
-        await new Promise(r => setTimeout(r, 300));
+      if (liq < 5000 || vol24h < 500) {
+        console.log(`      ⏭️  Low metrics - skip\n`);
+        processed.add(mint);
         continue;
       }
 
-      // PASSED!
-      processed.add(tokenId);
-      saveProcessed();
-      newCount++;
+      if (lastAlertTime[mint] && (Date.now() - lastAlertTime[mint]) < 3600000) {
+        console.log(`      ⏭️  Already alerted - skip\n`);
+        continue;
+      }
 
-      const analysis = analyze8Layers(token);
+      processed.add(mint);
+      lastAlertTime[mint] = Date.now();
+      
+      console.log(`      ✅ SENDING ALERT!\n`);
 
-      console.log(`      ✅ Quality token - alerted`);
-
-      const msg = `✅ <b>NEW TOKEN ✅</b>
-
-<b>🟢 QUALITY TOKEN DETECTED</b>
-
-<b>${token.baseToken.name}</b> (${token.baseToken.symbol})
-Address: <code>${token.baseToken.address}</code>
-
-📊 <b>Metrics:</b>
-• Liquidity: $${(liq / 1000).toFixed(1)}K
-• Market Cap: $${(mcap / 1000).toFixed(1)}K
-• 5min Change: ${change > 0 ? '📈' : '📉'} ${Math.abs(change).toFixed(1)}%
-
-🛡️ <b>Safety Score: ${analysis.safeScore}/100</b>
-
-<b>✅ Passed Checks:</b>
-${analysis.passed.slice(0, 3).join('\n')}
-
-🟢 Status: ALERTED ✅
-
-🔗 <a href="https://dexscreener.com/solana/${tokenId}">📊 View</a>
-🔗 <a href="https://rugcheck.xyz/tokens/${tokenId}">🔍 Check</a>`;
+      const msg = `🔥 <b>GMGN - HOT SOLANA TOKEN 🔥</b>\n\n<b>${name}</b> (${symbol})\nMint: <code>${mint}</code>\n\n📊 <b>24h METRICS:</b>\n• Liquidity: $${(liq / 1000).toFixed(1)}K\n• Volume: $${(vol24h / 1000).toFixed(1)}K\n• Holders: ${holders}\n• Price Change: ${priceChange > 0 ? '📈' : '📉'} ${Math.abs(priceChange).toFixed(1)}%\n\n🚀 <b>HOT TOKEN ALERT!</b>\n\n🔗 <a href="https://gmgn.ai/sol/token/${mint}">GMGN</a> | <a href="https://dexscreener.com/solana/${mint}">DexScreener</a>`;
 
       await sendAlert(msg);
-      await new Promise(r => setTimeout(r, 1000));
+      await new Promise(r => setTimeout(r, 2000));
     }
-
-    console.log(`\n   📊 Result: ${newCount} passed, ${rejectedCount} rejected`);
-
   } catch (e) {
-    console.error('   ❌ Scan error:', e.message);
+    console.log(`   ❌ Error: ${e.message.split('\n')[0]}`);
   }
 }
 
-// ==================== STARTUP ====================
+async function fallbackGeckoTerminal() {
+  try {
+    console.log('\n   🔄 [GeckoTerminal Fallback] Scanning...');
+
+    const res = await axios.get('https://api.geckoterminal.com/api/v2/networks/solana/pools?order=h24_transaction_count_desc&limit=20', {
+      timeout: 8000,
+      headers: { 'User-Agent': 'Mozilla/5.0' }
+    }).catch(() => null);
+
+    if (!res?.data?.data) {
+      console.log('   ❌ Fallback also failed');
+      return;
+    }
+
+    console.log(`   ✅ Fallback working! Got ${res.data.data.length} pools\n`);
+
+    for (const pool of res.data.data.slice(0, 3)) {
+      const baseToken = pool.tokens?.[0];
+      if (!baseToken || processed.has(baseToken.address)) continue;
+
+      const liq = parseFloat(pool.reserve_in_usd) || 0;
+      if (liq < 5000) {
+        processed.add(baseToken.address);
+        continue;
+      }
+
+      processed.add(baseToken.address);
+
+      const msg = `🟢 <b>NEW TOKEN</b>\n\n<b>${baseToken.name}</b> (${baseToken.symbol})\nLiquidity: $${(liq / 1000).toFixed(1)}K`;
+      await sendAlert(msg);
+      await new Promise(r => setTimeout(r, 1500));
+    }
+  } catch (e) {
+    console.log(`   ❌ Fallback error: ${e.message.split('\n')[0]}`);
+  }
+}
 
 async function startup() {
-  loadProcessed();
+  try {
+    if (fs.existsSync('processed.json')) {
+      const data = JSON.parse(fs.readFileSync('processed.json', 'utf8'));
+      processed = new Set(data);
+    }
+  } catch (e) {}
 
-  console.log('🚀 HYBRID BOT ONLINE\n');
-  console.log('📊 Mode: Real API + Mock Fallback');
-  console.log('🔄 Scan interval: 20 seconds');
-  console.log('📋 Demo tokens: If API unavailable\n');
+  console.log('\n✅ GMGN TOKEN HUNTER BOT ONLINE\n');
+  console.log('🔥 Primary: GMGN API');
+  console.log('📋 Fallback: GeckoTerminal\n');
 
-  await sendAlert('🚀 <b>HYBRID BOT ONLINE</b>\n\n✅ Real API mode (if available)\n📋 Demo data mode (fallback)\n\n🔍 Scanning Solana tokens every 20 sec');
+  try {
+    await sendAlert('🔥 <b>GMGN BOT ONLINE!</b>\n✅ Scanning Solana\n✅ Hot token alerts\n\n🎯 Hunting begins!');
+  } catch (e) {
+    console.error('⚠️  Telegram connection issue');
+  }
 
-  // Initial scan
-  console.log('🔍 Starting initial scan...');
-  await scanTokens();
+  console.log('⏰ Starting scans...\n');
 
-  // Continuous scanning
-  setInterval(scanTokens, 20000);
+  setInterval(scanGMGNTokens, 12000);
 
-  // Status check every minute
   setInterval(() => {
-    const dataSource = apiWorking ? '🟢 Real API' : '📋 Demo Data';
-    const tokens = processed.size;
-    console.log(`\n📊 Status: ${dataSource} | Tokens tracked: ${tokens}`);
+    try {
+      fs.writeFileSync('processed.json', JSON.stringify(Array.from(processed)));
+    } catch (e) {}
   }, 60000);
 }
 
 process.on('SIGINT', () => {
-  console.log('\n👋 Shutdown');
-  saveProcessed();
+  console.log('\n👋 Bot stopped');
   process.exit(0);
 });
 
 startup().catch(e => {
-  console.error('Error:', e);
+  console.error('Fatal error:', e);
   process.exit(1);
 });
