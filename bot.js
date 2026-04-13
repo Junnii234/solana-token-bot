@@ -18,9 +18,9 @@ let processed = new Set();
 let lastAlertTime = {};
 
 // ==================== FILTERS ====================
-const MIN_LIQUIDITY_USD = 5000;
-const MIN_VOLUME_USD = 100;
-const MIN_HOLDERS = 50;
+const MIN_LIQUIDITY_USD = 50;
+const MIN_VOLUME_USD = 10;
+const MIN_HOLDERS = 5;
 
 async function sendAlert(msg) {
   try {
