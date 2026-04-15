@@ -13,9 +13,9 @@ const alerted = new Set();
 
 async function checkRug(mint) {
     try {
-        const res = await axios.get(`https://api.rugcheck.xyz/v1/tokens/${mint}/report`, { timeout: 2000 });
+        const res = await axios.get(`https://api.rugcheck.xyz/v1/tokens/${mint}/report`, { timeout: 2500 });
         return { score: res.data.score || 0, risks: res.data.risks?.map(r => r.name).join(', ') || 'Clean' };
-    } catch (e) { return { score: 0, risks: 'New Token - Fast Alert' }; }
+    } catch (e) { return { score: 0, risks: 'New - Verify Manually' }; }
 }
 
 function startListening() {
@@ -24,24 +24,13 @@ function startListening() {
 
     ws.on('open', () => {
         console.log('🔗 Connected to Solana (Enhanced Mode)');
-        
-        pingInterval = setInterval(() => {
-            if (ws.readyState === WebSocket.OPEN) ws.ping();
-        }, 30000);
+        pingInterval = setInterval(() => { if (ws.readyState === WebSocket.OPEN) ws.ping(); }, 30000);
 
-        // This subscribes to FULLY PARSED transactions mentioning Pump.fun
         ws.send(JSON.stringify({
-            jsonrpc: "2.0",
-            id: 1,
-            method: "transactionSubscribe",
+            jsonrpc: "2.0", id: 1, method: "transactionSubscribe",
             params: [
                 { "accountInclude": ["6EF8rrecthR5DkZ8zFm9kAnLXYvshU9S6YecYyF"] },
-                {
-                    "commitment": "processed",
-                    "encoding": "jsonParsed",
-                    "transactionDetails": "full",
-                    "maxSupportedTransactionVersion": 0
-                }
+                { "commitment": "processed", "encoding": "jsonParsed", "transactionDetails": "full", "maxSupportedTransactionVersion": 0 }
             ]
         }));
     });
@@ -49,25 +38,30 @@ function startListening() {
     ws.on('message', async (data) => {
         try {
             const json = JSON.parse(data.toString());
-            if (json.result && !json.params) return; // Subscription confirmation
+            if (!json.params?.result) return;
             
             const tx = json.params.result.transaction;
-            const logMessages = tx.meta.logMessages || [];
+            const logs = tx.meta.logMessages || [];
 
-            // Identify the "Create" instruction in Pump.fun
-            if (logMessages.some(log => log.includes("Program log: Instruction: Create"))) {
-                // In a 'Create' tx, the Mint account is usually the 1st or 2nd account index
-                // We pull it directly from the parsed account keys
+            // Detect Pump.fun "Create" instruction
+            if (logs.some(l => l.includes("Instruction: Create"))) {
+                // Broad search for the Mint: It's usually a new account with 0 lamports or specific state
+                // In Pump.fun Create, the Mint is consistently at index 1 in the accountKeys
                 const mint = tx.transaction.message.accountKeys[1].pubkey;
 
-                if (alerted.has(mint)) return;
-                alerted.add(mint);
-
-                console.log(`✨ DETECTED: ${mint}`);
-                const security = await checkRug(mint);
-                sendTelegramAlert(mint, security);
+                if (mint && !alerted.has(mint)) {
+                    alerted.add(mint);
+                    console.log(`✨ DETECTED: ${mint}`);
+                    
+                    const security = await checkRug(mint);
+                    
+                    // Filter: Only alert if score is decent
+                    if (security.score < 800) {
+                        sendTelegramAlert(mint, security);
+                    }
+                }
             }
-        } catch (e) { /* Ignore non-tx data */ }
+        } catch (e) { /* Non-critical data */ }
     });
 
     ws.on('close', () => {
@@ -78,7 +72,11 @@ function startListening() {
 
 function sendTelegramAlert(mint, security) {
     const msg = `🚨 <b>NEW PUMP.FUN MINT</b>\n\n<code>${mint}</code>\n\n🛡 <b>Score: ${security.score}</b>\n\n<a href="https://bullx.io/terminal?chain=solana&address=${mint}">⚡ BullX</a> | <a href="https://dexscreener.com/solana/${mint}">📊 DexScreener</a>`;
-    bot.sendMessage(CHAT_ID, msg, { parse_mode: 'HTML', disable_web_page_preview: true });
+    bot.sendMessage(CHAT_ID, msg, { parse_mode: 'HTML', disable_web_page_preview: true })
+       .then(() => console.log("✅ Alert Sent!"))
+       .catch(e => console.error("❌ Telegram Fail:", e.message));
 }
 
+// Initial Test
+bot.sendMessage(CHAT_ID, "🚀 <b>Enhanced Bot Online.</b> Waiting for launches...");
 startListening();
