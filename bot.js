@@ -147,3 +147,8 @@ Risks: <i>${security.risks}</i>
 
 // --- START ---
 startListening();
+// Quick Debug Test
+console.log("Testing Telegram Connection...");
+bot.sendMessage(CHAT_ID, "Testing... If you see this, Chat ID and Token are correct.")
+   .then(() => console.log("✅ Test Message Sent!"))
+   .catch((err) => console.log("❌ Test Failed. Error:", err.message));
