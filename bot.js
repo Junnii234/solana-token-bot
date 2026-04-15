@@ -5,100 +5,66 @@ const axios = require('axios');
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
-const HELIUS_KEY = 'cad2ea55-0ae1-4005-8b8a-3b04167a57fb'; 
-const HELIUS_WS_URL = `wss://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}`;
+const PUMP_WS_URL = 'wss://pumpportal.fun/api/data'; // Dedicated fast feed
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
 const alerted = new Set();
 
-// --- DASHBOARD COUNTERS ---
+// DASHBOARD COUNTERS
 let totalSeen = 0;
+let totalPassed = 0;
 let totalSkipped = 0;
-let totalDetected = 0;
 
 async function checkRug(mint) {
     try {
-        const res = await axios.get(`https://api.rugcheck.xyz/v1/tokens/${mint}/report`, { timeout: 2500 });
-        return { score: res.data.score || 0, risks: res.data.risks?.map(r => r.name).join(', ') || 'Clean' };
-    } catch (e) { return { score: 0, risks: 'New - Verify Manually' }; }
+        const res = await axios.get(`https://api.rugcheck.xyz/v1/tokens/${mint}/report`, { timeout: 2000 });
+        return { score: res.data.score || 0 };
+    } catch (e) { return { score: 0 }; }
 }
 
 function startListening() {
-    const ws = new WebSocket(HELIUS_WS_URL);
-    let pingInterval;
+    const ws = new WebSocket(PUMP_WS_URL);
 
     ws.on('open', () => {
-        console.log('🔗 Connected to Solana (Enhanced Enhanced Mode)');
-        // Print header for the dashboard
-        console.log('--------------------------------------------------');
-        console.log('STATS: SEEN | SKIPPED | DETECTED');
-        console.log('--------------------------------------------------');
+        console.log('✅ Connected to Direct Pump.fun Stream');
+        console.log('📊 LIVE LOGS ACTIVE: Monitoring every launch...');
         
-        pingInterval = setInterval(() => { if (ws.readyState === WebSocket.OPEN) ws.ping(); }, 30000);
-
-        ws.send(JSON.stringify({
-            jsonrpc: "2.0", id: 1, method: "transactionSubscribe",
-            params: [
-                { "accountInclude": ["6EF8rrecthR5DkZ8zFm9kAnLXYvshU9S6YecYyF"] },
-                { "commitment": "processed", "encoding": "jsonParsed", "transactionDetails": "full", "maxSupportedTransactionVersion": 0 }
-            ]
-        }));
+        // Subscribing to only New Token Creations
+        ws.send(JSON.stringify({ "method": "subscribeNewToken" }));
     });
 
     ws.on('message', async (data) => {
         try {
-            const json = JSON.parse(data.toString());
-            if (!json.params?.result) return;
-            
+            const event = JSON.parse(data.toString());
+            if (!event.mint) return;
+
             totalSeen++;
-            const tx = json.params.result.transaction;
-            const logs = tx.meta.logMessages || [];
+            const mint = event.mint;
 
-            // Detect 'create' or 'create_v2' per your research
-            const isLaunch = logs.some(l => 
-                l.includes("Instruction: create") || 
-                l.includes("Instruction: create_v2")
-            );
+            if (alerted.has(mint)) return;
+            alerted.add(mint);
 
-            if (isLaunch) {
-                // More robust Mint extraction
-                const mint = tx.transaction.message.accountKeys[1].pubkey;
-
-                if (mint && !alerted.has(mint)) {
-                    totalDetected++;
-                    alerted.add(mint);
-                    const hasBuy = logs.some(l => l.includes("Instruction: buy"));
-                    
-                    console.log(`\n✨ [${totalDetected}] DETECTED: ${mint} | Dev Buy: ${hasBuy}`);
-                    const security = await checkRug(mint);
-
-                    // If it passes the filter, send it!
-                    if (security.score < 800) {
-                        sendTelegramAlert(mint, security, hasBuy);
-                    } else {
-                        console.log(`🚫 [SKIP] ${mint} failed filter (Score: ${security.score})`);
-                    }
-                }
+            // SECURITY FILTER
+            const security = await checkRug(mint);
+            
+            if (security.score < 800) {
+                totalPassed++;
+                const isDevBuy = event.solAmount > 0;
+                console.log(`\n🚀 [${totalPassed}] NEW TOKEN: ${mint} | Dev Buy: ${event.solAmount} SOL`);
+                
+                sendTelegramAlert(event, security.score);
             } else {
                 totalSkipped++;
-                // Update the log line every 10 trades so it doesn't spam but shows activity
-                if (totalSeen % 10 === 0) {
-                    process.stdout.write(`\r📊 STATS: ${totalSeen} Seen | ${totalSkipped} Skipped | ${totalDetected} Detected`);
-                }
+                process.stdout.write(`\r📊 STATS: ${totalSeen} Seen | ${totalSkipped} Scams Skipped | ${totalPassed} Alerts Sent`);
             }
-        } catch (e) { /* Heartbeat packets */ }
+        } catch (e) { /* Ignore non-JSON */ }
     });
 
-    ws.on('close', () => {
-        console.log('\n♻️ Reconnecting...');
-        clearInterval(pingInterval);
-        setTimeout(startListening, 2000);
-    });
+    ws.on('close', () => setTimeout(startListening, 2000));
 }
 
-function sendTelegramAlert(mint, security, isHighIntent) {
-    const title = isHighIntent ? "🔥 <b>DEV BOUGHT ON LAUNCH</b>" : "🚨 <b>NEW PUMP.FUN MINT</b>";
-    const msg = `${title}\n\n<code>${mint}</code>\n\n🛡 <b>Score: ${security.score}</b>\n\n<a href="https://bullx.io/terminal?chain=solana&address=${mint}">⚡ BullX</a> | <a href="https://dexscreener.com/solana/${mint}">📊 DexScreener</a>`;
+function sendTelegramAlert(token, score) {
+    const msg = `🚨 <b>NEW PUMP.FUN MINT</b>\n\n<code>${token.mint}</code>\n\n🛡 <b>RugScore: ${score}</b>\n💰 <b>Initial Buy:</b> ${token.solAmount} SOL\n\n<a href="https://bullx.io/terminal?chain=solana&address=${token.mint}">⚡ BullX</a> | <a href="https://dexscreener.com/solana/${token.mint}">📊 DexScreener</a>`;
     bot.sendMessage(CHAT_ID, msg, { parse_mode: 'HTML', disable_web_page_preview: true });
 }
 
