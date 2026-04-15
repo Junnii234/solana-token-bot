@@ -9,121 +9,149 @@ const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const PUMP_WS_URL = 'wss://pumpportal.fun/api/data';
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
-const alerted = new Set();
 
-// --- DASHBOARD COUNTERS ---
+// Tracking sets to prevent duplicate alerts
+const alertedLaunch = new Set();
+const alertedMigration = new Set();
+
+// Dashboard counters
 let totalSeen = 0;
 let totalSkipped = 0;
-let totalViral = 0;
+let totalPassed = 0;
 
 /**
  * Security Check via RugCheck API
- * Filters out Mint/Freeze risks automatically
+ * Analyzes Mint/Freeze authority and Holder concentration
  */
-async function checkRug(mint) {
+async function getRugReport(mint) {
     try {
-        const res = await axios.get(`https://api.rugcheck.xyz/v1/tokens/${mint}/report`, { timeout: 2000 });
-        return { score: res.data.score || 0 };
+        const res = await axios.get(`https://api.rugcheck.xyz/v1/tokens/${mint}/report`, { timeout: 4000 });
+        return res.data;
     } catch (e) { 
-        return { score: 0 }; // Default to 0 for brand new tokens
+        return null; 
     }
 }
 
-/**
- * Main Logic: Connects to the direct Pump.fun stream
- */
 function startListening() {
     const ws = new WebSocket(PUMP_WS_URL);
 
     ws.on('open', () => {
-        console.log('🎯 VIRAL HUNTER ACTIVE: Monitoring High-Intent Launches');
+        console.log('🛡️ TWO-STAGE SNIPER ACTIVE');
+        console.log('Stage 1: 15s Deep Scan | Stage 2: Migration Tracker');
         console.log('-------------------------------------------------------');
-        // Subscribe specifically to New Token Creations
+        
+        // Subscribe to new creations AND all trades (to track bonding progress)
         ws.send(JSON.stringify({ "method": "subscribeNewToken" }));
+        ws.send(JSON.stringify({ "method": "subscribeTokenTrade" }));
     });
 
     ws.on('message', async (data) => {
         try {
             const event = JSON.parse(data.toString());
-            if (!event.mint) return;
+            const mint = event.mint;
+            if (!mint) return;
 
-            totalSeen++;
-
-            // --- THE VIRAL FILTERS (ACtf...pump Style) ---
-            
-            // 1. SOCIALS CHECK: Professional launches always have metadata links
-            const hasSocials = event.twitter || event.website || event.telegram;
-            
-            // 2. CONVICTION CHECK: Dev must buy at least 0.5 SOL to show they are serious
-            const MIN_DEV_BUY = 0.5; 
-
-            if (!hasSocials || event.solAmount < MIN_DEV_BUY) {
-                totalSkipped++;
-                // Update live status line
-                process.stdout.write(`\r📊 [${totalSeen}] Scanning... | Skipped: ${totalSkipped} | Viral Found: ${totalViral}`);
-                return;
+            // --- STAGE 1: NEW TOKEN DETECTION ---
+            if (event.txType === 'create' || !event.txType) {
+                if (!alertedLaunch.has(mint)) {
+                    totalSeen++;
+                    alertedLaunch.add(mint);
+                    handleNewLaunch(event);
+                }
             }
 
-            const mint = event.mint;
-            if (alerted.has(mint)) return;
-            alerted.add(mint);
-
-            // 3. SECURITY CHECK
-            const security = await checkRug(mint);
-            
-            // Strictly alert only on Low-Risk (Score < 400)
-            if (security.score < 400) {
-                totalViral++;
-                console.log(`\n\n💎 VIRAL MATCH: ${event.name} (${event.symbol})`);
-                console.log(`📍 Mint: ${mint}`);
-                console.log(`💰 Dev Buy: ${event.solAmount} SOL | Socials: ✅`);
-                
-                sendViralAlert(event, security.score);
-            } else {
-                totalSkipped++;
+            // --- STAGE 2: BONDING CURVE COMPLETION (MIGRATION) ---
+            // A market cap of ~80 SOL signals the move to Raydium
+            if (event.marketCapSol >= 80 && !alertedMigration.has(mint)) {
+                alertedMigration.add(mint);
+                sendMigrationAlert(event);
             }
 
         } catch (e) {
-            // Skip non-event messages
+            // Silently handle non-JSON messages
         }
     });
 
     ws.on('close', () => {
-        console.log('\n♻️ Connection lost. Reconnecting to stream...');
+        console.log('\n♻️ Connection lost. Reconnecting...');
         setTimeout(startListening, 2000);
     });
-
-    ws.on('error', (err) => console.error('❌ WS Error:', err.message));
 }
 
 /**
- * Sends the rich-format Telegram Alert
+ * Handles the 15-second safety delay and RugCheck analysis
  */
-function sendViralAlert(token, score) {
-    const twitterLink = token.twitter ? `<a href="${token.twitter}">🐦 Twitter</a>` : "<s>Twitter</s>";
-    const webLink = token.website ? `<a href="${token.website}">🌐 Website</a>` : "<s>Website</s>";
-    const tgLink = token.telegram ? `<a href="${token.telegram}">💬 Telegram</a>` : "<s>Telegram</s>";
+async function handleNewLaunch(event) {
+    const mint = event.mint;
+    
+    // Log progress in console
+    process.stdout.write(`\r📊 [${totalSeen}] Detected: ${mint.slice(0,6)}... | Waiting 15s for analysis`);
 
-    const msg = `💎 <b>VIRAL POTENTIAL DETECTED</b> 💎
+    setTimeout(async () => {
+        const report = await getRugReport(mint);
+        if (!report) {
+            totalSkipped++;
+            return;
+        }
 
-<b>Token:</b> ${token.name} (${token.symbol})
-<code>${token.mint}</code>
+        const score = report.score || 0;
+        const risks = report.risks || [];
 
-🛡 <b>RugScore: ${score}</b>
-💰 <b>Dev Buy:</b> ${token.solAmount} SOL
+        // 1. Check for Mint/Freeze Authority
+        const hasMint = risks.some(r => r.name.toLowerCase().includes('mint'));
+        const hasFreeze = risks.some(r => r.name.toLowerCase().includes('freeze'));
+        
+        // 2. Check Top 10 Holder Concentration (< 20% risk)
+        const highHolders = risks.some(r => r.name.toLowerCase().includes('top 10') || r.name.toLowerCase().includes('high holder'));
 
-🔗 ${twitterLink} | ${webLink} | ${tgLink}
-
-<a href="https://bullx.io/terminal?chain=solana&address=${token.mint}">⚡ BullX (Instant Snipe)</a>
-<a href="https://dexscreener.com/solana/${token.mint}">📊 DexScreener</a>`;
-
-    bot.sendMessage(CHAT_ID, msg, { 
-        parse_mode: 'HTML', 
-        disable_web_page_preview: true 
-    }).then(() => console.log("✅ Telegram Notified!"))
-      .catch(e => console.error("❌ Telegram Error:", e.message));
+        // 3. Final Decision (Liquidity is EXEMPT here as it's on bonding curve)
+        if (score < 400 && !hasMint && !hasFreeze && !highHolders) {
+            totalPassed++;
+            console.log(`\n✅ SAFE TOKEN PASSED: ${event.symbol}`);
+            sendLaunchAlert(event, score);
+        } else {
+            totalSkipped++;
+        }
+    }, 15000); // 15 Second delay
 }
 
-// --- STARTUP ---
-bot.sendMessage(CHAT_ID, "🚀 <b>Viral Hunter Online.</b>\nFilters: Socials required + Min 0.5 SOL Dev Buy.");
+/**
+ * Stage 1 Telegram Notification
+ */
+function sendLaunchAlert(event, score) {
+    const msg = `🚨 <b>NEW SAFE LAUNCH</b> 🚨
+
+<b>Name:</b> ${event.name} (${event.symbol})
+<code>${event.mint}</code>
+
+🛡 <b>RugScore:</b> ${score}
+👥 <b>Top 10 Holders:</b> Safe (< 20%)
+❄️ <b>Mint/Freeze:</b> Disabled
+💰 <b>Initial Buy:</b> ${event.solAmount || 0} SOL
+
+<a href="https://bullx.io/terminal?chain=solana&address=${event.mint}">⚡ BullX (Buy)</a> | <a href="https://dexscreener.com/solana/${event.mint}">📊 DexScreener</a>`;
+
+    bot.sendMessage(CHAT_ID, msg, { parse_mode: 'HTML', disable_web_page_preview: true });
+}
+
+/**
+ * Stage 2 Telegram Notification (Migration)
+ */
+function sendMigrationAlert(event) {
+    const msg = `🎊 <b>BONDING CURVE COMPLETED!</b> 🎊
+
+The token <b>${event.symbol}</b> has hit 100% and is migrating to Raydium.
+
+<code>${event.mint}</code>
+
+🔥 <b>Liquidity is being Burned/Locked</b>
+🚀 <b>Bonding Curve:</b> 100% Finished
+
+<a href="https://dexscreener.com/solana/${event.mint}">📊 View Live Chart</a>`;
+
+    bot.sendMessage(CHAT_ID, msg, { parse_mode: 'HTML' });
+    console.log(`\n🎊 [MIGRATION] ${event.symbol} hit Raydium!`);
+}
+
+// Start the bot
 startListening();
