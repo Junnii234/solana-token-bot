@@ -3,14 +3,16 @@ const TelegramBot = require('node-telegram-bot-api');
 const WebSocket = require('ws');
 const axios = require('axios');
 
+// --- CONFIGURATION ---
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
-const HELIUS_KEY = 'cad2ea55-0ae1-4005-8b8a-3b04167a57fb';
+const HELIUS_KEY = 'cad2ea55-0ae1-4005-8b8a-3b04167a57fb'; 
 const HELIUS_WS_URL = `wss://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}`;
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
 const alerted = new Set();
 
+// --- SECURITY CHECKER ---
 async function checkRug(mint) {
     try {
         const res = await axios.get(`https://api.rugcheck.xyz/v1/tokens/${mint}/report`, { timeout: 2500 });
@@ -23,19 +25,20 @@ async function checkRug(mint) {
     }
 }
 
+// --- MAIN WEBSOCKET LISTENER ---
 function startListening() {
     const ws = new WebSocket(HELIUS_WS_URL);
     let pingInterval;
 
     ws.on('open', () => {
-        console.log('🔗 Connected to Solana (Enhanced Mode)');
+        console.log('🔗 Connected to Solana (Enhanced Enhanced Mode)');
         
-        // Keep-Alive
+        // Keep-Alive Ping
         pingInterval = setInterval(() => { 
             if (ws.readyState === WebSocket.OPEN) ws.ping(); 
         }, 30000);
 
-        // Subscription for Pump.fun transactions
+        // Subscribing to Pump.fun via High-Performance transactionSubscribe
         ws.send(JSON.stringify({
             jsonrpc: "2.0", id: 1, method: "transactionSubscribe",
             params: [
@@ -58,30 +61,34 @@ function startListening() {
             const tx = json.params.result.transaction;
             const logs = tx.meta.logMessages || [];
 
-            // Case-sensitive check for the instructions you found on Solscan
-            const isLaunch = logs.some(l => 
+            // 1. DETECTION LOGIC (Using your lowercase research)
+            const hasLaunch = logs.some(l => 
                 l.includes("Instruction: create") || 
-                l.includes("Instruction: create_v2") ||
-                l.includes("Instruction: InitializeMint")
+                l.includes("Instruction: create_v2")
             );
 
-            if (isLaunch) {
-                // Extracting Mint: In Pump.fun 'create' txs, the Mint is index 1 of accountKeys
+            // 2. INTENT LOGIC (Checking if Dev bought in same TX)
+            const hasInitialBuy = logs.some(l => l.includes("Instruction: buy"));
+
+            if (hasLaunch) {
+                // In Pump.fun creation, the Mint is always Account Index 1
                 const mint = tx.transaction.message.accountKeys[1].pubkey;
 
                 if (mint && !alerted.has(mint)) {
                     alerted.add(mint);
-                    console.log(`🚀 LAUNCH DETECTED: ${mint}`);
+                    
+                    const logPrefix = hasInitialBuy ? "🔥 [DEV BOUGHT]" : "🆕 [FAIR]";
+                    console.log(`${logPrefix} Detected: ${mint}`);
                     
                     const security = await checkRug(mint);
-                    sendTelegramAlert(mint, security);
+                    sendTelegramAlert(mint, security, hasInitialBuy);
                 }
             } else {
-                // Heartbeat indicator in logs
+                // Print a dot for every Pump.fun trade handled (shows bot is alive)
                 process.stdout.write("."); 
             }
         } catch (e) {
-            // Ignore non-transactional packets
+            // Skip non-tx packets
         }
     });
 
@@ -94,9 +101,20 @@ function startListening() {
     ws.on('error', (err) => console.error('❌ WebSocket Error:', err.message));
 }
 
-function sendTelegramAlert(mint, security) {
-    const msg = `🚨 <b>NEW PUMP.FUN MINT</b>\n\n<code>${mint}</code>\n\n🛡 <b>Score: ${security.score}</b>\n\n<a href="https://bullx.io/terminal?chain=solana&address=${mint}">⚡ BullX</a> | <a href="https://dexscreener.com/solana/${mint}">📊 DexScreener</a>`;
-    
+// --- TELEGRAM NOTIFIER ---
+function sendTelegramAlert(mint, security, isHighIntent) {
+    const title = isHighIntent ? "🔥 <b>DEV BOUGHT ON LAUNCH</b> 🔥" : "🚨 <b>NEW PUMP.FUN MINT</b>";
+    const intentBadge = isHighIntent ? "✅ <b>Developer Entry Detected</b>" : "⚪ Standard Launch";
+
+    const msg = `${title}
+
+<code>${mint}</code>
+
+🛡 <b>RugScore: ${security.score}</b>
+📊 <b>Status:</b> ${intentBadge}
+
+<a href="https://bullx.io/terminal?chain=solana&address=${mint}">⚡ BullX (Fast Buy)</a> | <a href="https://dexscreener.com/solana/${mint}">📊 DexScreener</a>`;
+
     bot.sendMessage(CHAT_ID, msg, { 
         parse_mode: 'HTML', 
         disable_web_page_preview: true 
@@ -104,6 +122,6 @@ function sendTelegramAlert(mint, security) {
       .catch(e => console.error("❌ Telegram Fail:", e.message));
 }
 
-// Initial Startup
-bot.sendMessage(CHAT_ID, "🚀 <b>Enhanced Bot Online.</b> Case-sensitive 'create' filters active.");
+// --- STARTUP ---
+bot.sendMessage(CHAT_ID, "🚀 <b>Bot Online & Optimized.</b>\nMonitoring for 'create' and 'create_v2' instructions.");
 startListening();
