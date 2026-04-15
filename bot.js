@@ -5,15 +5,10 @@ const axios = require('axios');
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
-const PUMP_WS_URL = 'wss://pumpportal.fun/api/data'; // Dedicated fast feed
+const PUMP_WS_URL = 'wss://pumpportal.fun/api/data';
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
 const alerted = new Set();
-
-// DASHBOARD COUNTERS
-let totalSeen = 0;
-let totalPassed = 0;
-let totalSkipped = 0;
 
 async function checkRug(mint) {
     try {
@@ -26,10 +21,7 @@ function startListening() {
     const ws = new WebSocket(PUMP_WS_URL);
 
     ws.on('open', () => {
-        console.log('✅ Connected to Direct Pump.fun Stream');
-        console.log('📊 LIVE LOGS ACTIVE: Monitoring every launch...');
-        
-        // Subscribing to only New Token Creations
+        console.log('🎯 VIRAL HUNTER ACTIVE');
         ws.send(JSON.stringify({ "method": "subscribeNewToken" }));
     });
 
@@ -38,33 +30,54 @@ function startListening() {
             const event = JSON.parse(data.toString());
             if (!event.mint) return;
 
-            totalSeen++;
-            const mint = event.mint;
+            // --- THE VIRAL FILTERS ---
+            
+            // 1. MUST HAVE SOCIALS (Website or Twitter or Telegram)
+            // Viral tokens like the one you mentioned ALWAYS have these.
+            const hasSocials = event.twitter || event.website || event.telegram;
+            
+            // 2. MINIMUM DEV BUY (Conviction)
+            // Developers of solid coins usually put at least 0.5 - 1 SOL.
+            const minBuy = 0.5;
 
+            if (!hasSocials || event.solAmount < minBuy) {
+                // Silently skip "anonymous" or "low-buy" junk
+                return;
+            }
+
+            const mint = event.mint;
             if (alerted.has(mint)) return;
             alerted.add(mint);
 
-            // SECURITY FILTER
             const security = await checkRug(mint);
             
-            if (security.score < 800) {
-                totalPassed++;
-                const isDevBuy = event.solAmount > 0;
-                console.log(`\n🚀 [${totalPassed}] NEW TOKEN: ${mint} | Dev Buy: ${event.solAmount} SOL`);
-                
-                sendTelegramAlert(event, security.score);
-            } else {
-                totalSkipped++;
-                process.stdout.write(`\r📊 STATS: ${totalSeen} Seen | ${totalSkipped} Scams Skipped | ${totalPassed} Alerts Sent`);
+            // 3. RUGCHECK FILTER
+            if (security.score < 400) {
+                console.log(`🚀 TARGET MATCH: ${event.symbol} (${mint})`);
+                sendViralAlert(event, security.score);
             }
-        } catch (e) { /* Ignore non-JSON */ }
+        } catch (e) { }
     });
 
     ws.on('close', () => setTimeout(startListening, 2000));
 }
 
-function sendTelegramAlert(token, score) {
-    const msg = `🚨 <b>NEW PUMP.FUN MINT</b>\n\n<code>${token.mint}</code>\n\n🛡 <b>RugScore: ${score}</b>\n💰 <b>Initial Buy:</b> ${token.solAmount} SOL\n\n<a href="https://bullx.io/terminal?chain=solana&address=${token.mint}">⚡ BullX</a> | <a href="https://dexscreener.com/solana/${token.mint}">📊 DexScreener</a>`;
+function sendViralAlert(token, score) {
+    const twitter = token.twitter ? `<a href="${token.twitter}">🐦 Twitter</a>` : "No Twitter";
+    const web = token.website ? `<a href="${token.website}">🌐 Website</a>` : "No Web";
+
+    const msg = `💎 <b>VIRAL POTENTIAL DETECTED</b> 💎
+    
+<b>Token:</b> ${token.name} (${token.symbol})
+<code>${token.mint}</code>
+
+🛡 <b>Score: ${score}</b>
+💰 <b>Dev Buy:</b> ${token.solAmount} SOL
+
+🔗 ${twitter} | ${web}
+
+<a href="https://bullx.io/terminal?chain=solana&address=${token.mint}">⚡ BullX (Snipe)</a> | <a href="https://dexscreener.com/solana/${token.mint}">📊 DexScreener</a>`;
+
     bot.sendMessage(CHAT_ID, msg, { parse_mode: 'HTML', disable_web_page_preview: true });
 }
 
