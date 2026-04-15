@@ -9,35 +9,20 @@ const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const PUMP_WS_URL = 'wss://pumpportal.fun/api/data';
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
-
-const alertedLaunch = new Set();
-const alertedMigration = new Set();
-
-// Dashboard counters for Railway logs
-let totalSeen = 0;
-let totalSkipped = 0;
-let totalPassed = 0;
+const alerted = new Set();
 
 /**
- * Security Check via RugCheck API
+ * Main function to start the sniper
  */
-async function getRugReport(mint) {
-    try {
-        const res = await axios.get(`https://api.rugcheck.xyz/v1/tokens/${mint}/report`, { timeout: 4000 });
-        return res.data;
-    } catch (e) { 
-        return null; 
-    }
-}
-
 function startListening() {
     const ws = new WebSocket(PUMP_WS_URL);
 
     ws.on('open', () => {
-        console.log('💎 PREMIER SNIPER ONLINE');
-        console.log('Monitoring: New Launches & Raydium Migrations');
+        console.log('💎 ELITE HYBRID SNIPER ONLINE');
+        console.log('Targeting: Atomic Bundles (create_v2 + High Buy + Socials)');
         console.log('-------------------------------------------------------');
         
+        // Donon methods subscribe karna zaroori hai bundles ki monitoring ke liye
         ws.send(JSON.stringify({ "method": "subscribeNewToken" }));
         ws.send(JSON.stringify({ "method": "subscribeTokenTrade" }));
     });
@@ -46,77 +31,72 @@ function startListening() {
         try {
             const event = JSON.parse(data.toString());
             const mint = event.mint;
-            if (!mint) return;
+            if (!mint || alerted.has(mint)) return;
 
-            // --- STAGE 1: NEW TOKEN DETECTION ---
-            if (event.txType === 'create' || !event.txType) {
-                if (!alertedLaunch.has(mint)) {
-                    totalSeen++;
-                    alertedLaunch.add(mint);
-                    handleNewLaunch(event);
-                }
+            // --- THE FORENSIC ALPHA FILTER ---
+            
+            const devBuy = event.solAmount || 0;
+            const isV2 = event.vSolReserves !== undefined;
+            const hasSocials = (event.twitter || event.website || event.telegram);
+
+            // 1. "CREATE ONLY" DISCARD: Agar dev buy 0.8 SOL se kam hai to skip (Scam prevention)
+            if (devBuy < 0.8) return;
+
+            // 2. ALPHA TRACK: create_v2 + High Buy (1.5+ SOL) + Socials
+            // Ye wahi signature hai jo ACtf aur 34q2 jaise tokens ka hota hai.
+            if (isV2 && devBuy >= 1.5 && hasSocials) {
+                alerted.add(mint);
+                sendEliteAlert(event, "🚀 ELITE ATOMIC BUNDLE (INSTANT)", "ULTRA-HIGH");
+            } 
+            
+            // 3. VERIFIED TRACK: Agar dev buy acha hai (0.8 - 1.5) lekin v2 nahi ya socials late hain
+            else if (devBuy >= 0.8) {
+                alerted.add(mint);
+                // 15 seconds wait for RugCheck to index first 50 transactions
+                setTimeout(async () => {
+                    const report = await axios.get(`https://api.rugcheck.xyz/v1/tokens/${mint}/report`)
+                        .then(r => r.data)
+                        .catch(() => null);
+
+                    if (report && report.score < 400) {
+                        sendEliteAlert(event, "🚨 SAFE VERIFIED LAUNCH", "MEDIUM", report.score);
+                    }
+                }, 15000);
             }
 
-            // --- STAGE 2: MIGRATION TRACKER (Market Cap > 80 SOL) ---
-            if (event.marketCapSol >= 80 && !alertedMigration.has(mint)) {
-                alertedMigration.add(mint);
-                sendMigrationAlert(event);
-            }
-
-        } catch (e) { }
+        } catch (e) {
+            // Ignore non-JSON messages
+        }
     });
 
-    ws.on('close', () => setTimeout(startListening, 2000));
+    ws.on('close', () => {
+        console.log('♻️ Connection lost. Reconnecting in 2s...');
+        setTimeout(startListening, 2000);
+    });
 }
 
-async function handleNewLaunch(event) {
-    const mint = event.mint;
-    process.stdout.write(`\r📊 Analyzing: ${mint.slice(0,6)}...`);
-
-    // 15s Delay to allow Top 10 Holders and metadata to finalize
-    setTimeout(async () => {
-        const report = await getRugReport(mint);
-        if (!report) {
-            totalSkipped++;
-            return;
-        }
-
-        const score = report.score || 0;
-        const risks = report.risks || [];
-
-        const hasMint = risks.some(r => r.name.toLowerCase().includes('mint'));
-        const hasFreeze = risks.some(r => r.name.toLowerCase().includes('freeze'));
-        const highHolders = risks.some(r => r.name.toLowerCase().includes('top 10') || r.name.toLowerCase().includes('high holder'));
-
-        // Stage 1 Criteria: Low RugScore + Safe Authorities + Clean Holders
-        if (score < 400 && !hasMint && !hasFreeze && !highHolders) {
-            totalPassed++;
-            sendLaunchAlert(event, score);
-        } else {
-            totalSkipped++;
-        }
-    }, 15000); 
-}
-
-// --- VISUAL ALERT STYLING ---
-
-function sendLaunchAlert(event, score) {
+/**
+ * Styled Telegram Alert with all required links
+ */
+function sendEliteAlert(event, title, conviction, score = "N/A") {
     const msg = `
-🌟 <b>NEW HIGH-CONVICTION LAUNCH</b> 🌟
+${title}
 ━━━━━━━━━━━━━━━━━━
 <b>Token:</b> ${event.name} (<code>${event.symbol}</code>)
 <b>Mint:</b> <code>${event.mint}</code>
 
-🛡 <b>SAFETY CHECK:</b>
-├ <b>RugScore:</b> <code>${score}</code> (Excellent)
-├ <b>Top 10 Holders:</b> < 20% ✅
-└ <b>Authorities:</b> Mint/Freeze Disabled ✅
+📊 <b>FORENSIC ANALYSIS:</b>
+├ <b>Conviction:</b> <code>${conviction}</code>
+├ <b>Dev Initial Buy:</b> <code>${(event.solAmount || 0).toFixed(2)}</code> SOL ✅
+└ <b>RugScore:</b> <code>${score}</code>
 
-💰 <b>Dev Initial Buy:</b> <code>${event.solAmount || 0}</code> SOL
-━━━━━━━━━━━━━━━━━━
-🔗 <b>LINKS:</b>
-📦 <a href="https://rugcheck.xyz/tokens/${event.mint}"><b>RugCheck Report</b></a>
-⚡ <a href="https://bullx.io/terminal?chain=solana&address=${event.mint}"><b>Snipe on BullX</b></a>
+🛠 <b>VERIFICATION TOOLS:</b>
+📦 <a href="https://rugcheck.xyz/tokens/${event.mint}"><b>RugCheck (Check 1st 50 Tx)</b></a>
+⛓ <a href="https://solscan.io/token/${event.mint}"><b>Solscan (Check Funding)</b></a>
+
+💰 <b>TRADE & CHARTS:</b>
+🪐 <a href="https://jup.ag/swap/SOL-${event.mint}"><b>Jupiter Swap</b></a>
+⚡ <a href="https://bullx.io/terminal?chain=solana&address=${event.mint}"><b>BullX Snipe</b></a>
 📊 <a href="https://dexscreener.com/solana/${event.mint}"><b>DexScreener</b></a>
     `;
 
@@ -126,24 +106,5 @@ function sendLaunchAlert(event, score) {
     });
 }
 
-function sendMigrationAlert(event) {
-    const msg = `
-🚀 <b>BONDING CURVE GRADUATED!</b> 🚀
-━━━━━━━━━━━━━━━━━━
-<b>Token:</b> ${event.symbol}
-<b>Status:</b> Migrating to Raydium
-
-🔥 <b>Liquidity:</b> Burned/Locked Automatically
-📈 <b>Market Cap:</b> <code>${Math.round(event.marketCapSol)}</code> SOL
-━━━━━━━━━━━━━━━━━━
-🔍 <a href="https://rugcheck.xyz/tokens/${event.mint}"><b>Verify Migration</b></a>
-📊 <a href="https://dexscreener.com/solana/${event.mint}"><b>Live Chart</b></a>
-    `;
-
-    bot.sendMessage(CHAT_ID, msg, { 
-        parse_mode: 'HTML', 
-        disable_web_page_preview: true 
-    });
-}
-
+// Start the bot
 startListening();
