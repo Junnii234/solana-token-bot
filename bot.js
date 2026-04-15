@@ -10,18 +10,16 @@ const PUMP_WS_URL = 'wss://pumpportal.fun/api/data';
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
 
-// Tracking sets to prevent duplicate alerts
 const alertedLaunch = new Set();
 const alertedMigration = new Set();
 
-// Dashboard counters
+// Dashboard counters for Railway logs
 let totalSeen = 0;
 let totalSkipped = 0;
 let totalPassed = 0;
 
 /**
  * Security Check via RugCheck API
- * Analyzes Mint/Freeze authority and Holder concentration
  */
 async function getRugReport(mint) {
     try {
@@ -36,11 +34,10 @@ function startListening() {
     const ws = new WebSocket(PUMP_WS_URL);
 
     ws.on('open', () => {
-        console.log('🛡️ TWO-STAGE SNIPER ACTIVE');
-        console.log('Stage 1: 15s Deep Scan | Stage 2: Migration Tracker');
+        console.log('💎 PREMIER SNIPER ONLINE');
+        console.log('Monitoring: New Launches & Raydium Migrations');
         console.log('-------------------------------------------------------');
         
-        // Subscribe to new creations AND all trades (to track bonding progress)
         ws.send(JSON.stringify({ "method": "subscribeNewToken" }));
         ws.send(JSON.stringify({ "method": "subscribeTokenTrade" }));
     });
@@ -60,33 +57,23 @@ function startListening() {
                 }
             }
 
-            // --- STAGE 2: BONDING CURVE COMPLETION (MIGRATION) ---
-            // A market cap of ~80 SOL signals the move to Raydium
+            // --- STAGE 2: MIGRATION TRACKER (Market Cap > 80 SOL) ---
             if (event.marketCapSol >= 80 && !alertedMigration.has(mint)) {
                 alertedMigration.add(mint);
                 sendMigrationAlert(event);
             }
 
-        } catch (e) {
-            // Silently handle non-JSON messages
-        }
+        } catch (e) { }
     });
 
-    ws.on('close', () => {
-        console.log('\n♻️ Connection lost. Reconnecting...');
-        setTimeout(startListening, 2000);
-    });
+    ws.on('close', () => setTimeout(startListening, 2000));
 }
 
-/**
- * Handles the 15-second safety delay and RugCheck analysis
- */
 async function handleNewLaunch(event) {
     const mint = event.mint;
-    
-    // Log progress in console
-    process.stdout.write(`\r📊 [${totalSeen}] Detected: ${mint.slice(0,6)}... | Waiting 15s for analysis`);
+    process.stdout.write(`\r📊 Analyzing: ${mint.slice(0,6)}...`);
 
+    // 15s Delay to allow Top 10 Holders and metadata to finalize
     setTimeout(async () => {
         const report = await getRugReport(mint);
         if (!report) {
@@ -97,61 +84,66 @@ async function handleNewLaunch(event) {
         const score = report.score || 0;
         const risks = report.risks || [];
 
-        // 1. Check for Mint/Freeze Authority
         const hasMint = risks.some(r => r.name.toLowerCase().includes('mint'));
         const hasFreeze = risks.some(r => r.name.toLowerCase().includes('freeze'));
-        
-        // 2. Check Top 10 Holder Concentration (< 20% risk)
         const highHolders = risks.some(r => r.name.toLowerCase().includes('top 10') || r.name.toLowerCase().includes('high holder'));
 
-        // 3. Final Decision (Liquidity is EXEMPT here as it's on bonding curve)
+        // Stage 1 Criteria: Low RugScore + Safe Authorities + Clean Holders
         if (score < 400 && !hasMint && !hasFreeze && !highHolders) {
             totalPassed++;
-            console.log(`\n✅ SAFE TOKEN PASSED: ${event.symbol}`);
             sendLaunchAlert(event, score);
         } else {
             totalSkipped++;
         }
-    }, 15000); // 15 Second delay
+    }, 15000); 
 }
 
-/**
- * Stage 1 Telegram Notification
- */
+// --- VISUAL ALERT STYLING ---
+
 function sendLaunchAlert(event, score) {
-    const msg = `🚨 <b>NEW SAFE LAUNCH</b> 🚨
+    const msg = `
+🌟 <b>NEW HIGH-CONVICTION LAUNCH</b> 🌟
+━━━━━━━━━━━━━━━━━━
+<b>Token:</b> ${event.name} (<code>${event.symbol}</code>)
+<b>Mint:</b> <code>${event.mint}</code>
 
-<b>Name:</b> ${event.name} (${event.symbol})
-<code>${event.mint}</code>
+🛡 <b>SAFETY CHECK:</b>
+├ <b>RugScore:</b> <code>${score}</code> (Excellent)
+├ <b>Top 10 Holders:</b> < 20% ✅
+└ <b>Authorities:</b> Mint/Freeze Disabled ✅
 
-🛡 <b>RugScore:</b> ${score}
-👥 <b>Top 10 Holders:</b> Safe (< 20%)
-❄️ <b>Mint/Freeze:</b> Disabled
-💰 <b>Initial Buy:</b> ${event.solAmount || 0} SOL
+💰 <b>Dev Initial Buy:</b> <code>${event.solAmount || 0}</code> SOL
+━━━━━━━━━━━━━━━━━━
+🔗 <b>LINKS:</b>
+📦 <a href="https://rugcheck.xyz/tokens/${event.mint}"><b>RugCheck Report</b></a>
+⚡ <a href="https://bullx.io/terminal?chain=solana&address=${event.mint}"><b>Snipe on BullX</b></a>
+📊 <a href="https://dexscreener.com/solana/${event.mint}"><b>DexScreener</b></a>
+    `;
 
-<a href="https://bullx.io/terminal?chain=solana&address=${event.mint}">⚡ BullX (Buy)</a> | <a href="https://dexscreener.com/solana/${event.mint}">📊 DexScreener</a>`;
-
-    bot.sendMessage(CHAT_ID, msg, { parse_mode: 'HTML', disable_web_page_preview: true });
+    bot.sendMessage(CHAT_ID, msg, { 
+        parse_mode: 'HTML', 
+        disable_web_page_preview: true 
+    });
 }
 
-/**
- * Stage 2 Telegram Notification (Migration)
- */
 function sendMigrationAlert(event) {
-    const msg = `🎊 <b>BONDING CURVE COMPLETED!</b> 🎊
+    const msg = `
+🚀 <b>BONDING CURVE GRADUATED!</b> 🚀
+━━━━━━━━━━━━━━━━━━
+<b>Token:</b> ${event.symbol}
+<b>Status:</b> Migrating to Raydium
 
-The token <b>${event.symbol}</b> has hit 100% and is migrating to Raydium.
+🔥 <b>Liquidity:</b> Burned/Locked Automatically
+📈 <b>Market Cap:</b> <code>${Math.round(event.marketCapSol)}</code> SOL
+━━━━━━━━━━━━━━━━━━
+🔍 <a href="https://rugcheck.xyz/tokens/${event.mint}"><b>Verify Migration</b></a>
+📊 <a href="https://dexscreener.com/solana/${event.mint}"><b>Live Chart</b></a>
+    `;
 
-<code>${event.mint}</code>
-
-🔥 <b>Liquidity is being Burned/Locked</b>
-🚀 <b>Bonding Curve:</b> 100% Finished
-
-<a href="https://dexscreener.com/solana/${event.mint}">📊 View Live Chart</a>`;
-
-    bot.sendMessage(CHAT_ID, msg, { parse_mode: 'HTML' });
-    console.log(`\n🎊 [MIGRATION] ${event.symbol} hit Raydium!`);
+    bot.sendMessage(CHAT_ID, msg, { 
+        parse_mode: 'HTML', 
+        disable_web_page_preview: true 
+    });
 }
 
-// Start the bot
 startListening();
