@@ -1,10 +1,14 @@
 require('dotenv').config();
 const axios = require('axios');
+const TelegramBot = require('node-telegram-bot-api');
 
-// API Configuration
+// --- Configuration ---
 const HELIUS_RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
+const CHAT_ID = process.env.CHAT_ID;
+const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
 
-// 🏆 VERIFIED MOON-TOKEN SIGNATURES (CEX & BRIDGES)
+// 🏆 CEX & BRIDGE SIGNATURES
 const CEX_SIGNATURES = [
     "9Wz2n", "66pPj", "5VC9e", "AC56n", "ASTy", "36vC", "2AQp", "H8sR", "6V9p",
     "FixedFloat", "ChangeNOW", "SideShift", "StealthEX", "SimpleSwap",
@@ -12,19 +16,18 @@ const CEX_SIGNATURES = [
 ];
 
 /**
- * PHASE 1 & 2: DEV-FIRST FORENSIC ENGINE
+ * Integrated Forensic Engine
  */
 async function performEliteForensic(mint) {
     try {
-        console.log(`\n-----------------------------------------`);
-        console.log(`🔍 SCANNING: ${mint}`);
+        console.log(`\n🔍 SCANNING: ${mint}`);
 
-        // --- STEP 1: DEV WALLET & GENESIS TRACE (PHASE 1) ---
+        // --- PHASE 1: DEV FUNDING & AGE ---
         const sigsRes = await axios.post(HELIUS_RPC_URL, {
             jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [mint]
         });
         
-        if (!sigsRes.data.result || sigsRes.data.result.length === 0) return { isElite: false, reason: "No Txs Found" };
+        if (!sigsRes.data.result || sigsRes.data.result.length === 0) return { isElite: false };
 
         const launchTxSig = sigsRes.data.result[sigsRes.data.result.length - 1].signature;
         const txDetails = await axios.post(HELIUS_RPC_URL, {
@@ -33,15 +36,12 @@ async function performEliteForensic(mint) {
         });
         
         const dev = txDetails.data.result.transaction.message.accountKeys[0].pubkey;
-
-        // Trace Funding (Genesis)
         const walletSigs = await axios.post(HELIUS_RPC_URL, {
             jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [dev, { limit: 1000 }]
         });
         
         const genesis = walletSigs.data.result[walletSigs.data.result.length - 1];
         const walletAgeMins = (Date.now() / 1000 - genesis.blockTime) / 60;
-
         const fundTx = await axios.post(HELIUS_RPC_URL, {
             jsonrpc: "2.0", id: 1, method: "getTransaction",
             params: [genesis.signature, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed" }]
@@ -49,62 +49,44 @@ async function performEliteForensic(mint) {
         
         const funder = fundTx.data.result.transaction.message.accountKeys[0].pubkey;
         const logs = JSON.stringify(fundTx.data.result.meta.logMessages || "").toLowerCase();
-
-        // Check CEX/Bridge Pattern
         const isCEX = CEX_SIGNATURES.some(sig => funder.startsWith(sig) || logs.includes(sig.toLowerCase()));
-        
-        // 🛡️ DEV-FIRST FILTER: Agar funding kharab hai aur wallet naya hai, to yahin stop
+
+        // 🛡️ DEV GATEKEEPER
         if (!isCEX && walletAgeMins < 1440) {
-            console.log(`   ❌ DEV REJECTED: Internal Funding & New Wallet (${walletAgeMins.toFixed(0)}m)`);
-            return { isElite: false, reason: "Risky Dev Funding" };
+            console.log(`   ❌ REJECTED: Internal/New Wallet`);
+            return { isElite: false };
         }
 
-        console.log(`   ✅ DEV PASSED: ${isCEX ? 'CEX Funded' : 'Old Wallet (' + walletAgeMins.toFixed(0) + 'm)'}`);
-
-        // --- STEP 2: SOCIAL DETECTION (PHASE 2 - ONLY IF DEV PASSED) ---
-        // Give a small delay for metadata indexing if needed
+        // --- PHASE 2: SOCIAL SCAN (Only if Dev Passed) ---
         const assetRes = await axios.post(HELIUS_RPC_URL, {
             jsonrpc: "2.0", id: 1, method: "getAsset", params: { id: mint }
         });
-        
         const fullDump = JSON.stringify(assetRes.data.result).toLowerCase();
-        const hasTG = fullDump.includes("t.me/") || fullDump.includes("telegram.me/");
+        const hasTG = fullDump.includes("t.me/");
         const hasX = fullDump.includes("twitter.com/") || fullDump.includes("x.com/");
-        const webMatch = fullDump.match(/https?:\/\/(?!(pump\.fun|ipfs|arweave|schema\.metaplex|github|w3\.org))[a-zA-Z0-9.-]+\.[a-z]{2,}/g);
-        const hasWeb = webMatch && webMatch.length > 0;
         
-        const socialScore = (hasTG ? 1 : 0) + (hasX ? 1 : 0) + (hasWeb ? 1 : 0);
-
-        // --- STEP 3: FINAL VERDICT ---
-        if (socialScore >= 1) {
-            console.log(`   ✅ SOCIALS PASSED: TG:${hasTG?'Y':'N'} X:${hasX?'Y':'N'} Web:${hasWeb?'Y':'N'}`);
-            console.log(`   🌟 FINAL VERDICT: ELITE PASS`);
-            return { isElite: true, dev, age: walletAgeMins.toFixed(0), funding: isCEX ? "CEX" : "OLD" };
-        } else {
-            console.log(`   ❌ SOCIALS FAILED: No valid links found.`);
-            return { isElite: false, reason: "No Socials" };
+        if (hasTG || hasX) {
+            console.log(`   🌟 ELITE PASS: ${mint}`);
+            
+            // --- PHASE 3: SEND TELEGRAM ALERT ---
+            const message = `🌟 *ELITE MOON TOKEN DETECTED*\n\n` +
+                            `📍 *Mint:* \`${mint}\`\n` +
+                            `👤 *Dev:* \`${dev.substring(0,6)}...\`\n` +
+                            `💰 *Funding:* ${isCEX ? "✅ CEX/Bridge" : "⏳ Old Wallet"}\n` +
+                            `🕒 *Age:* ${walletAgeMins.toFixed(0)} mins\n` +
+                            `📱 *Socials:* ${hasTG ? "TG ✅" : ""} ${hasX ? "X ✅" : ""}\n\n` +
+                            `🔗 [DexScreener](https://dexscreener.com/solana/${mint})`;
+            
+            await bot.sendMessage(CHAT_ID, message, { parse_mode: 'Markdown' });
+            return { isElite: true };
         }
 
-    } catch (error) {
-        console.log(`   ⚠️ Error processing ${mint.substring(0,8)}: ${error.message}`);
-        return { isElite: false, error: error.message };
+        return { isElite: false };
+
+    } catch (e) {
+        console.log(`   ⚠️ Error: ${e.message}`);
+        return { isElite: false };
     }
 }
 
-// 🔄 LOOP ENGINE (Fix for Multiple Mints)
-const TARGET_MINTS = [
-    "34q2KmCvapecJgR6ZrtbCTrzZVtkt3a5mHEA3TuEsWYb",
-    "BXnUS5vNFNvnjy2hLx6UCycgH5VvMw8HkC9qfae2pump",
-    "NV2RYH954cTJ3ckFUpvfqaQXU4ARqqDH3562nFSpump",
-    "Dfh5DzRgSvvCFDoYc2ciTkMrbDfRKybA4SoFbPmApump"
-];
-
-async function startBot() {
-    console.log("🚀 MOON-TOKEN SNIPER ENGINE STARTED");
-    for (const mint of TARGET_MINTS) {
-        const result = await performEliteForensic(mint);
-        // Yahan aap apni BUY logic add kar sakte hain: if(result.isElite) buy(mint);
-    }
-}
-
-startBot();
+module.exports = { performEliteForensic };
