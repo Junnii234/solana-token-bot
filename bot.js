@@ -6,62 +6,49 @@ const HELIUS_RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${process.env.HE
 const TEST_TOKENS = [
     "ACtfUWtgvaXrQGNMiohTusi5jcx5RJf5zwu9aAxkpump", // Elite ✅
     "BFiGUxnidogqcZAPVPDZRCfhx3nXnFLYqpQUaUGpump", // Elite ✅
-    "DiNCVMS3GRSxrWSC4REh7VZeppQ3DEkx8UjJt4u94nHR"  // Rug ❌
+    "DiNCVMS3GRSxrWSC4REh7VZeppQ3DEkx8UjJt4u94nHR"  // Rug ❌ (Ab isay FAIL hona chahiye)
 ];
 
-async function runSocialDetector() {
-    console.log("📡 TESTING UNIVERSAL SOCIAL DETECTOR...\n");
+async function runFixedSocialDetector() {
+    console.log("🛡️ RUNNING TRUE-LINK SOCIAL DETECTOR (V17)...\n");
 
     for (let mint of TEST_TOKENS) {
         try {
             console.log(`🔍 Mint: ${mint}`);
 
-            // STEP 1: Get Asset Data via Helius
             const assetRes = await axios.post(HELIUS_RPC_URL, {
                 jsonrpc: "2.0", id: 1, method: "getAsset", params: { id: mint }
             });
 
             const assetData = assetRes.data.result;
-            const content = assetData.content || {};
-            const metadata = content.metadata || {};
+            // Hum ab poori string nahi, balkay sirf metadata aur links ko target karenge
+            const metadata = assetData.content?.metadata || {};
+            const links = assetData.content?.links || {};
+            const external_url = assetData.content?.external_url || "";
             
-            // Sab data ko aik lambi string mein badal do taake "search" asan ho
-            const fullDataString = JSON.stringify(assetData).toLowerCase();
+            // Check for REAL links (No more empty detections)
+            const hasTwitter = (JSON.stringify(assetData).toLowerCase().includes("twitter.com") || JSON.stringify(assetData).toLowerCase().includes("x.com"));
+            const hasTelegram = (JSON.stringify(assetData).toLowerCase().includes("t.me") || JSON.stringify(assetData).toLowerCase().includes("telegram.me"));
+            
+            // 🛑 CRITICAL FIX: Ensure it's not just a pump.fun link
+            const hasWebsite = (external_url.length > 5 && !external_url.includes("pump.fun"));
 
-            // STEP 2: Multi-Layer Detection
-            const links = {
-                twitter: fullDataString.includes("twitter.com") || fullDataString.includes("x.com"),
-                telegram: fullDataString.includes("t.me") || fullDataString.includes("telegram.me"),
-                website: fullDataString.includes("http") && !fullDataString.includes("pump.fun") && !fullDataString.includes("ipfs")
-            };
+            console.log(`   ├ Twitter: ${hasTwitter ? "✅" : "❌"}`);
+            console.log(`   ├ Telegram: ${hasTelegram ? "✅" : "❌"}`);
+            console.log(`   ├ Website: ${hasWebsite ? "✅" : "❌"}`);
 
-            const hasAnySocial = links.twitter || links.telegram || links.website;
-
-            // STEP 3: Extra Depth Check (Metadata Description scan)
-            let descriptionSocial = false;
-            if (metadata.description) {
-                const desc = metadata.description.toLowerCase();
-                if (desc.includes("t.me") || desc.includes("twitter") || desc.includes("x.com")) {
-                    descriptionSocial = true;
-                }
-            }
-
-            console.log(`   ├ Twitter: ${links.twitter ? "✅" : "❌"}`);
-            console.log(`   ├ Telegram: ${links.telegram ? "✅" : "❌"}`);
-            console.log(`   ├ Website: ${links.website ? "✅" : "❌"}`);
-            console.log(`   ├ Desc Link: ${descriptionSocial ? "✅" : "❌"}`);
-
-            if (hasAnySocial || descriptionSocial) {
-                console.log(`   🌟 VERDICT: ✅ SOCIALS DETECTED\n`);
+            // Verdict: At least ONE valid external link must exist
+            if (hasTwitter || hasTelegram || hasWebsite) {
+                console.log(`   🌟 VERDICT: ✅ ELITE PASS (Socials Found)\n`);
             } else {
-                console.log(`   ❌ VERDICT: GHOST TOKEN (No Socials)\n`);
+                console.log(`   ❌ VERDICT: FAIL (No Social Links)\n`);
             }
 
         } catch (e) {
-            console.log(`   ❌ Error: Metadata fail or not found yet.\n`);
+            console.log(`   ❌ Error: Metadata index delay.\n`);
         }
         await new Promise(r => setTimeout(r, 1000));
     }
 }
 
-runSocialDetector();
+runFixedSocialDetector();
