@@ -4,62 +4,73 @@ const axios = require('axios');
 const HELIUS_RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
 
 const TEST_TOKENS = [
-    "Eg2ymQ2aQqjMcibnmTt8erC6Tvk9PVpJZCxvVPJz2agu" ,
-    "7ro7WwhwqgBh794AtHZJgj7HXU3ExgkeMCq2tB8pump" ,
     "ACtfUWtgvaXrQGNMiohTusi5jcx5RJf5zwu9aAxkpump", // Real
     "BFiGUxnidogqcZAPVPDZRCfhx3nXnFLYqpQUaUGpump", // Real
-    "8WXgE4GYHaPjyf4pujqx4293FhxK5u9GkDiFG3pppump" // Token from your screenshot
+    "DiNCVMS3GRSxrWSC4REh7VZeppQ3DEkx8UjJt4u94nHR"  // Rug
 ];
 
-async function runFinalSocialDetector() {
-    console.log("💎 JUNNI ELITE: FINAL SOCIAL SNIPER (V19)...\n");
+async function runFundingForensic() {
+    console.log("🕵️‍♂️ TRACING DEV WALLET ORIGIN...\n");
 
     for (let mint of TEST_TOKENS) {
         try {
-            console.log(`🔍 Mint: ${mint}`);
+            console.log(`🔍 Token: ${mint}`);
 
-            const assetRes = await axios.post(HELIUS_RPC_URL, {
-                jsonrpc: "2.0", id: 1, method: "getAsset", params: { id: mint }
+            // 1. Find Dev Wallet (via Launch Tx)
+            const sigsRes = await axios.post(HELIUS_RPC_URL, {
+                jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [mint]
+            });
+            const launchTxSig = sigsRes.data.result[sigsRes.data.result.length - 1].signature;
+            
+            const txDetails = await axios.post(HELIUS_RPC_URL, {
+                jsonrpc: "2.0", id: 1, method: "getTransaction",
+                params: [launchTxSig, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed" }]
+            });
+            const dev = txDetails.data.result.transaction.message.accountKeys[0].pubkey;
+
+            // 2. Find Dev's Genesis (Pehli Transaction)
+            const walletSigs = await axios.post(HELIUS_RPC_URL, {
+                jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [dev]
+            });
+            const allSigs = walletSigs.data.result || [];
+            const genesisSig = allSigs[allSigs.length - 1].signature;
+
+            const fundTx = await axios.post(HELIUS_RPC_URL, {
+                jsonrpc: "2.0", id: 1, method: "getTransaction",
+                params: [genesisSig, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed" }]
             });
 
-            const assetData = assetRes.data.result;
-            const uri = assetData.content?.json_uri || "";
+            // 3. Analyze Funding Source
+            const funder = fundTx.data.result.transaction.message.accountKeys[0].pubkey;
+            const logMessages = fundTx.data.result.meta.logMessages || [];
+            const logsJoined = logMessages.join(" ");
+
+            // Pattern Detection
+            // Professional CEX usually has simple transfers (fewer logs)
+            // Ruggers routing through other wallets have complex logs
+            const isSimpleTransfer = logMessages.length < 12;
             
-            // --- BACKUP: Direct JSON Fetch (Yeh kabhi jhoot nahi bolta) ---
-            let externalData = {};
-            if (uri) {
-                try {
-                    const jsonRes = await axios.get(uri, { timeout: 2000 });
-                    externalData = jsonRes.data;
-                } catch (e) { /* IPFS lag */ }
-            }
+            // Known CEX/Bridge Indicators (Common patterns)
+            const isCEX = funder.startsWith("9Wz2") || // Binance
+                          funder.startsWith("66pP") || // Bybit
+                          logsJoined.includes("Transfer") && isSimpleTransfer;
 
-            // --- 🔎 TARGETED DETECTION (No more schema.metaplex garbage) ---
-            const fullDump = JSON.stringify({ assetData, externalData }).toLowerCase();
+            console.log(`   ├ Dev Wallet: ${dev}`);
+            console.log(`   ├ Funded By: ${funder}`);
+            console.log(`   ├ Logs Count: ${logMessages.length}`);
+            console.log(`   └ Pattern: ${isCEX ? "✅ Clean/CEX Origin" : "⚠️ Internal/Dirty Route"}`);
 
-            // Sirf asli patterns ko allow karein
-            const hasTG = fullDump.includes("t.me/") || fullDump.includes("telegram.me/");
-            const hasX = fullDump.includes("twitter.com/") || fullDump.includes("x.com/");
-            
-            // Website check: Must have http but NOT be common technical links
-            const webMatch = fullDump.match(/https?:\/\/(?!(pump\.fun|ipfs|arweave|schema\.metaplex|github|w3\.org))[a-zA-Z0-9.-]+\.[a-z]{2,}/g);
-            const hasWeb = webMatch && webMatch.length > 0;
-
-            console.log(`   ├ Telegram: ${hasTG ? "✅" : "❌"}`);
-            console.log(`   ├ Twitter: ${hasX ? "✅" : "❌"}`);
-            console.log(`   ├ Website: ${hasWeb ? "✅" : "❌"}`);
-
-            if (hasTG || hasX || hasWeb) {
-                console.log(`   🌟 VERDICT: ✅ PASS (Verified Socials Found)\n`);
+            if (isCEX) {
+                console.log(`   🌟 VERDICT: ✅ FUNDING VERIFIED\n`);
             } else {
-                console.log(`   ❌ VERDICT: FAIL (No Real Socials)\n`);
+                console.log(`   ❌ VERDICT: RISKY FUNDING\n`);
             }
 
         } catch (e) {
-            console.log(`   ❌ Error: Link detection failed.\n`);
+            console.log(`   ❌ Error: Trace failed.\n`);
         }
         await new Promise(r => setTimeout(r, 1000));
     }
 }
 
-runFinalSocialDetector();
+runFundingForensic();
