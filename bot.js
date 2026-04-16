@@ -9,7 +9,7 @@ const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const HELIUS_RPC = `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
 const HELIUS_WS = `wss://atlas-mainnet.helius-rpc.com?api-key=${process.env.HELIUS_API_KEY}`;
 
-const bot = new TelegramBot(TOKEN, { polling: false });
+const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
 
 const CEX_SIGNATURES = [
     "9Wz2n", "66pPj", "5VC9e", "AC56n", "ASTy", "36vC", "2AQp", "H8sR", "6V9p",
@@ -62,7 +62,7 @@ async function scanToken(mint) {
                 // --- 🔔 TELEGRAM ALERT 🔔 ---
                 const msg = `🌟 *ELITE TOKEN DETECTED*\n\n📍 Mint: \`${mint}\`\n💰 Fund: ${isCEX ? 'CEX ✅' : 'Old Wallet ⏳'}\n🕒 Age: ${ageMins.toFixed(0)} mins\n\n🔗 [DexScreener](https://dexscreener.com/solana/${mint})`;
                 
-                await bot.sendMessage(CHAT_ID, msg, { parse_mode: 'Markdown' });
+                await bot.sendMessage(TELEGRAM_CHAT_ID, msg, { parse_mode: 'Markdown' });
                 console.log(`✅ ALERT SENT: ${mint}`);
             }
         }
