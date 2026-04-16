@@ -1,122 +1,92 @@
 require('dotenv').config();
-const TelegramBot = require('node-telegram-bot-api');
-const WebSocket = require('ws');
 const axios = require('axios');
 
-const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
-const PUMP_WS_URL = 'wss://pumpportal.fun/api/data';
+// Apna Helius API key yahan load ho jayega
 const HELIUS_RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
 
-const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
-const alerted = new Set();
+const KNOWN_EXCHANGES = [
+    'Binance', 'OKX', 'Bybit', 'Kraken', 'MEXC', 
+    'KuCoin', 'FixedFloat', 'ChangeNOW', 'Gate.io', 'Circle'
+];
 
-const KNOWN_EXCHANGES = ['Binance', 'OKX', 'Bybit', 'Coinbase', 'FixedFloat', 'ChangeNOW', 'Circle', 'Gate.io'];
+// 🛑 JUNNI BHAI YAHAN APNE TOKEN ADDRESSES (MINTS) DAALEIN 🛑
+const TEST_TOKENS = [
+    "7voyyzYZVgZSmpzVqVZekmyZMtz1u7Cn29b84bVpump", // Real Token example
+     "ACtfUWtgvaXrQGNMiohTusi5jcx5RJf5zwu9aAxkpump",
+     "BFiGUxnidogqcZAPVPDZRCfhx3nXnFLYqpQUaUGpump" ,
+    "GRMRCsJJEEYXChrSDGaAsuK3W8YooF2R69GcdCXDpump" ,
+    "kLqMvUm1p4pRbxU4r8kWCTVAuWMJLtcTJqGb4b5pump" ,
+    "DiNCVMS3GRSxrWSC4REh7VZeppQ3DEkx8UjJt4u94nHR" ,
+    "3vvDYGkavdt1FNoUw1r5YxDTA6SrWRbHtUV72Ltkpump" 
+];
 
-function startListening() {
-    const ws = new WebSocket(PUMP_WS_URL);
+async function runTest() {
+    console.log("🚀 JUNNI'S FORENSIC TESTER STARTED...\n");
 
-    ws.on('open', () => {
-        console.log('🛡️ JUNNI V5: FORENSIC-FIRST MODE ACTIVE');
-        ws.send(JSON.stringify({ "method": "subscribeNewToken" }));
-    });
-
-    ws.on('message', async (data) => {
+    for (let mint of TEST_TOKENS) {
+        console.log(`🔍 Checking Token: ${mint}`);
         try {
-            const event = JSON.parse(data.toString());
-            if (!event.mint || alerted.has(event.mint)) return;
-
-            // --- STEP 1: SOL FILTER ---
-            if (event.solAmount < 1.0) return;
-            alerted.add(event.mint);
-
-            console.log(`🕵️‍♂️ Starting Forensic for: ${event.name}`);
-
-            // --- STEP 2: IMMEDIATE FORENSIC (Helius Scan) ---
-            const report = await performDeepForensic(event.traderPublicKey);
-
-            if (!report.isClean) {
-                console.log(`❌ BLOCKING DIRTY WALLET: ${event.name}`);
-                return;
+            // 1. Pump.fun API se Token ka Dev/Creator Wallet nikalna
+            const coinData = await axios.get(`https://frontend-api.pump.fun/coins/${mint}`).then(r => r.data);
+            
+            if (!coinData || !coinData.creator) {
+                console.log(`⚠️ Token data not found on Pump.fun API.\n`);
+                continue;
             }
 
-            // --- STEP 3: WAIT FOR SOCIALS (Settlement Delay) ---
-            // Ab forensic ho chuka hai, hum 4-5 seconds wait karenge taake socials load ho jayein
-            setTimeout(async () => {
-                try {
-                    const coinData = await axios.get(`https://frontend-api.pump.fun/coins/${event.mint}`).then(r => r.data);
-                    
-                    const hasSocials = coinData.twitter || coinData.website || coinData.telegram;
+            const creatorWallet = coinData.creator;
+            console.log(`   ├ Dev Wallet: ${creatorWallet}`);
 
-                    if (hasSocials) {
-                        sendEliteAlert(event, coinData, report);
-                    } else {
-                        console.log(`🌑 Skipping ${event.name}: Clean wallet but NO Socials.`);
-                    }
-                } catch (err) {
-                    console.log(`⚠️ Metadata not ready for ${event.name}`);
-                }
-            }, 5000);
+            // 2. Wallet ka Forensic Run karna
+            const report = await performAdvancedForensic(creatorWallet);
 
-        } catch (e) { }
-    });
+            // 3. Result Print karna
+            const status = report.isClean ? "✅ PASS (CLEAN)" : "❌ FAIL (RUG/DIRTY)";
+            console.log(`   ├ Result: ${status}`);
+            console.log(`   └ Funding Source: ${report.source}\n`);
 
-    ws.on('close', () => setTimeout(startListening, 2000));
+        } catch (error) {
+            console.log(`   ❌ Error testing ${mint}: ${error.message}\n`);
+        }
+        
+        // API rate limit se bachne ke liye 1 second ka gap
+        await new Promise(r => setTimeout(r, 1000));
+    }
+    console.log("🏁 TEST COMPLETE!");
 }
 
-async function performDeepForensic(walletAddr) {
+async function performAdvancedForensic(walletAddr) {
     try {
         const response = await axios.post(HELIUS_RPC_URL, {
-            jsonrpc: "2.0", id: "scan",
+            jsonrpc: "2.0", id: "test-scan",
             method: "getTransactions",
-            params: [walletAddr, { limit: 15 }]
+            params: [walletAddr, { limit: 10 }]
         });
 
         const txs = response.data.result || [];
-        if (txs.length === 0) return { isClean: true, source: "Brand New Wallet" };
+        if (txs.length === 0) return { isClean: true, source: "Brand New" };
 
-        const fundingTx = txs[txs.length - 1];
-        const desc = fundingTx.description || "";
-        
-        let source = "Personal Wallet";
-        let isClean = false;
+        const firstTx = txs[txs.length - 1];
+        const description = firstTx.description || "";
+        const sender = firstTx.nativeTransfers?.[0]?.fromUserAccount || "";
 
-        const match = KNOWN_EXCHANGES.find(ex => desc.includes(ex));
+        const nameMatch = KNOWN_EXCHANGES.find(ex => description.toLowerCase().includes(ex.toLowerCase()));
+        if (nameMatch) return { isClean: true, source: `Verified ${nameMatch}` };
 
-        if (match) {
-            source = `Verified ${match}`;
-            isClean = true;
-        } else if (txs.length < 6) {
-            source = "Fresh Wallet (Potential CEX)";
-            isClean = true;
+        if (sender.startsWith("9Wz2") || sender.startsWith("66pP") || sender.startsWith("ASTy")) {
+            return { isClean: true, source: "CEX Proxy Wallet (Verified)" };
         }
 
-        return { isClean, source };
+        if (txs.length <= 5) {
+            return { isClean: true, source: "Fresh Professional Wallet" };
+        }
+
+        return { isClean: false, source: "Linked Personal Wallet (Risk)" };
+
     } catch (e) {
         return { isClean: false, source: "Scan Error" };
     }
 }
 
-function sendEliteAlert(event, coinData, report) {
-    const msg = `
-🌟 <b>JUNNI'S ELITE SIGNAL (V5)</b>
-━━━━━━━━━━━━━━━━━━
-<b>Token:</b> ${coinData.name} (<code>${coinData.symbol}</code>)
-<b>Mint:</b> <code>${event.mint}</code>
-
-📊 <b>FORENSIC & SOCIALS:</b>
-├ <b>Dev Buy:</b> <code>${event.solAmount.toFixed(2)}</code> SOL ✅
-├ <b>Funding:</b> <code>${report.source}</code>
-├ <b>Twitter:</b> ${coinData.twitter ? "✅" : "❌"}
-├ <b>Telegram:</b> ${coinData.telegram ? "✅" : "❌"}
-└ <b>Website:</b> ${coinData.website ? "✅" : "❌"}
-
-🛠 <b>TOOLS:</b>
-📊 <a href="https://dexscreener.com/solana/${event.mint}"><b>DexScreener</b></a> | 📦 <a href="https://rugcheck.xyz/tokens/${event.mint}"><b>RugCheck</b></a>
-⚡ <a href="https://bullx.io/terminal?chain=solana&address=${event.mint}"><b>BullX Snipe</b></a>
-    `;
-
-    bot.sendMessage(CHAT_ID, msg, { parse_mode: 'HTML', disable_web_page_preview: true });
-}
-
-startListening();
+// Test start karein
+runTest();
