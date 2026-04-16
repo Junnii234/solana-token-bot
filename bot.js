@@ -4,6 +4,8 @@ const axios = require('axios');
 const HELIUS_RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
 
 const TEST_TOKENS = [
+    "Eg2ymQ2aQqjMcibnmTt8erC6Tvk9PVpJZCxvVPJz2agu" ,
+    "7ro7WwhwqgBh794AtHZJgj7HXU3ExgkeMCq2tB8pump" ,
     "ACtfUWtgvaXrQGNMiohTusi5jcx5RJf5zwu9aAxkpump", // Real
     "BFiGUxnidogqcZAPVPDZRCfhx3nXnFLYqpQUaUGpump", // Real
     "8WXgE4GYHaPjyf4pujqx4293FhxK5u9GkDiFG3pppump" // Token from your screenshot
