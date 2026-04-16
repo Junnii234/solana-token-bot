@@ -5,7 +5,10 @@ const HELIUS_RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${process.env.HE
 
 const TEST_TOKENS = [
     "ACtfUWtgvaXrQGNMiohTusi5jcx5RJf5zwu9aAxkpump", // Real (Teeno hone chahiye)
-    "BFiGUxnidogqcZAPVPDZRCfhx3nXnFLYqpQUaUGpump"  // Real (Teeno hone chahiye)
+    "BFiGUxnidogqcZAPVPDZRCfhx3nXnFLYqpQUaUGpump" ,
+    "8WXgE4GYHaPjyf4pujqx4293FhxK5u9GkDifG3pppump"
+    
+    // Real (Teeno hone chahiye)
 ];
 
 async function runDeepSocialCrawl() {
