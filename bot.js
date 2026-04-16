@@ -6,71 +6,62 @@ const HELIUS_RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${process.env.HE
 const TEST_TOKENS = [
     "ACtfUWtgvaXrQGNMiohTusi5jcx5RJf5zwu9aAxkpump", // Real
     "BFiGUxnidogqcZAPVPDZRCfhx3nXnFLYqpQUaUGpump", // Real
-    "DiNCVMS3GRSxrWSC4REh7VZeppQ3DEkx8UjJt4u94nHR"  // Rug
+    "DiNCVMS3GRSxrWSC4REh7VZeppQ3DEkx8UjJt4u94nHR"  // Rug ❌
 ];
 
-async function runFundingForensic() {
-    console.log("🕵️‍♂️ TRACING DEV WALLET ORIGIN...\n");
+async function runDevReputationForensic() {
+    console.log("🕵️‍♂️ ANALYZING DEV WALLET REPUTATION (V21)...\n");
 
     for (let mint of TEST_TOKENS) {
         try {
             console.log(`🔍 Token: ${mint}`);
 
-            // 1. Find Dev Wallet (via Launch Tx)
+            // 1. Get Dev Wallet
             const sigsRes = await axios.post(HELIUS_RPC_URL, {
                 jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [mint]
             });
             const launchTxSig = sigsRes.data.result[sigsRes.data.result.length - 1].signature;
-            
             const txDetails = await axios.post(HELIUS_RPC_URL, {
                 jsonrpc: "2.0", id: 1, method: "getTransaction",
                 params: [launchTxSig, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed" }]
             });
             const dev = txDetails.data.result.transaction.message.accountKeys[0].pubkey;
 
-            // 2. Find Dev's Genesis (Pehli Transaction)
+            // 2. Scan Dev Wallet History (Pehli 100 transactions)
             const walletSigs = await axios.post(HELIUS_RPC_URL, {
-                jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [dev]
+                jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [dev, { limit: 100 }]
             });
-            const allSigs = walletSigs.data.result || [];
-            const genesisSig = allSigs[allSigs.length - 1].signature;
-
+            const txCount = walletSigs.data.result.length;
+            
+            // 3. Get Genesis (Funding) Tx
+            const genesisSig = walletSigs.data.result[walletSigs.data.result.length - 1].signature;
             const fundTx = await axios.post(HELIUS_RPC_URL, {
                 jsonrpc: "2.0", id: 1, method: "getTransaction",
                 params: [genesisSig, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed" }]
             });
 
-            // 3. Analyze Funding Source
             const funder = fundTx.data.result.transaction.message.accountKeys[0].pubkey;
-            const logMessages = fundTx.data.result.meta.logMessages || [];
-            const logsJoined = logMessages.join(" ");
-
-            // Pattern Detection
-            // Professional CEX usually has simple transfers (fewer logs)
-            // Ruggers routing through other wallets have complex logs
-            const isSimpleTransfer = logMessages.length < 12;
             
-            // Known CEX/Bridge Indicators (Common patterns)
-            const isCEX = funder.startsWith("9Wz2") || // Binance
-                          funder.startsWith("66pP") || // Bybit
-                          logsJoined.includes("Transfer") && isSimpleTransfer;
+            // ⚖️ ELITE CRITERIA
+            // 1. Dev must have > 2 pre-launch transactions (Not a 'single-use' rug wallet)
+            // 2. Funder must NOT be the dev himself (Self-funding is risky)
+            const isReputable = txCount > 2 && txCount < 100; // Professional but fresh
+            const isSelfFunded = funder === dev;
 
-            console.log(`   ├ Dev Wallet: ${dev}`);
-            console.log(`   ├ Funded By: ${funder}`);
-            console.log(`   ├ Logs Count: ${logMessages.length}`);
-            console.log(`   └ Pattern: ${isCEX ? "✅ Clean/CEX Origin" : "⚠️ Internal/Dirty Route"}`);
+            console.log(`   ├ Dev Wallet: ${dev.substring(0,8)}...`);
+            console.log(`   ├ Wallet History: ${txCount} TXs`);
+            console.log(`   ├ Funded By: ${funder.substring(0,8)}...`);
+            console.log(`   └ Status: ${isReputable ? "✅ Active Dev" : "❌ Burner/Rug Wallet"}`);
 
-            if (isCEX) {
-                console.log(`   🌟 VERDICT: ✅ FUNDING VERIFIED\n`);
+            if (isReputable && !isSelfFunded) {
+                console.log(`   🌟 VERDICT: ✅ ELITE PASS\n`);
             } else {
-                console.log(`   ❌ VERDICT: RISKY FUNDING\n`);
+                let reason = isSelfFunded ? "Self-Funded (Risky)" : "Single-Use Burner Wallet";
+                console.log(`   ❌ VERDICT: FAIL (${reason})\n`);
             }
 
-        } catch (e) {
-            console.log(`   ❌ Error: Trace failed.\n`);
-        }
+        } catch (e) { console.log(`   ❌ Error: Trace failed.\n`); }
         await new Promise(r => setTimeout(r, 1000));
     }
 }
-
-runFundingForensic();
+runDevReputationForensic();
