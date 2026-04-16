@@ -4,16 +4,15 @@ const TelegramBot = require('node-telegram-bot-api');
 
 // --- 1. Configuration ---
 const HELIUS_RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
+const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: false });
 const CHAT_ID = process.env.CHAT_ID;
-const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
 
 const CEX_SIGNATURES = ["9Wz2n", "66pPj", "5VC9e", "AC56n", "ASTy", "36vC", "2AQp", "H8sR", "6V9p", "FixedFloat", "ChangeNOW", "Binance", "Bybit", "OKX"];
 
-// --- 2. The Forensic Engine ---
+// --- 2. The Elite Forensic Engine ---
 async function performEliteForensic(mint) {
     try {
-        console.log(`🔍 Checking: ${mint}`);
+        console.log(`🔍 Scanning: ${mint.substring(0, 8)}...`);
 
         // Phase 1: Dev Funding
         const sigsRes = await axios.post(HELIUS_RPC_URL, {
@@ -29,11 +28,12 @@ async function performEliteForensic(mint) {
         
         const dev = txDetails.data.result.transaction.message.accountKeys[0].pubkey;
         const walletSigs = await axios.post(HELIUS_RPC_URL, {
-            jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [dev, { limit: 1000 }]
+            jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [dev, { limit: 20 }]
         });
         
         const genesis = walletSigs.data.result[walletSigs.data.result.length - 1];
         const walletAgeMins = (Date.now() / 1000 - genesis.blockTime) / 60;
+        
         const fundTx = await axios.post(HELIUS_RPC_URL, {
             jsonrpc: "2.0", id: 1, method: "getTransaction",
             params: [genesis.signature, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed" }]
@@ -41,12 +41,13 @@ async function performEliteForensic(mint) {
         
         const funder = fundTx.data.result.transaction.message.accountKeys[0].pubkey;
         const logs = JSON.stringify(fundTx.data.result.meta.logMessages || "").toLowerCase();
+        
+        // 🚀 SMART CEX DETECTION
         const isCEX = CEX_SIGNATURES.some(sig => funder.startsWith(sig) || logs.includes(sig.toLowerCase()));
 
-        // Dev-First Filter
         if (!isCEX && walletAgeMins < 1440) {
-            console.log(`❌ Rejected: ${mint.substring(0,6)}... (Risky Funding)`);
-            return; 
+            console.log(`❌ REJECTED: Internal/New Wallet (${walletAgeMins.toFixed(0)}m)`);
+            return;
         }
 
         // Phase 2: Socials
@@ -58,9 +59,7 @@ async function performEliteForensic(mint) {
         const hasX = fullDump.includes("twitter.com/") || fullDump.includes("x.com/");
 
         if (hasTG || hasX) {
-            console.log(`🌟 ELITE PASS: ${mint}`);
-            
-            // --- ALERT TRIGGER ---
+            console.log(`🌟 ELITE PASS: Sending Alert!`);
             const message = `🌟 *ELITE TOKEN DETECTED*\n\n` +
                             `📍 *Mint:* \`${mint}\`\n` +
                             `💰 *Funding:* ${isCEX ? "✅ CEX/Bridge" : "⏳ Old Wallet"}\n` +
@@ -75,17 +74,20 @@ async function performEliteForensic(mint) {
     }
 }
 
-// --- 3. THE TRIGGER (The Missing Part) ---
+// --- 3. THE TRIGGER & KEEP-ALIVE ---
 const TEST_MINTS = [
     "BXnUS5vNFNvnjy2hLx6UCycgH5VvMw8HkC9qfae2pump",
     "NV2RYH954cTJ3ckFUpvfqaQXU4ARqqDH3562nFSpump"
 ];
 
-async function startBot() {
-    console.log("🚀 Bot is Online! Waiting for tokens...");
+console.log("🚀 MOON-TOKEN SNIPER ENGINE LIVE");
+
+// Yeh loop har 2 minute baad check karega taake bot online rahe
+setInterval(async () => {
     for (const mint of TEST_MINTS) {
         await performEliteForensic(mint);
     }
-}
+}, 120000); // 120 seconds interval
 
-startBot(); // Yeh line bot ko "Chala" rahi hai
+// Pehli baar foran chalao
+TEST_MINTS.forEach(mint => performEliteForensic(mint));
