@@ -16,7 +16,8 @@ function startListening() {
     const ws = new WebSocket(PUMP_WS_URL);
 
     ws.on('open', () => {
-        console.log('💎 MUSHTAQ DUAL-FORENSIC SNIPER LIVE');
+        console.log('🛡️ ELITE CLEAN-FEED SNIPER ONLINE');
+        console.log('Mode: Forensic First, Alert Second');
         ws.send(JSON.stringify({ "method": "subscribeNewToken" }));
     });
 
@@ -27,91 +28,87 @@ function startListening() {
             if (!mint || alerted.has(mint)) return;
 
             const devBuy = event.solAmount || 0;
-            if (devBuy < 1.0) return; // 1.0 SOL filter
+            // Strategy: 1.0 SOL se kam wale tokens ignore
+            if (devBuy < 1.0) return;
 
             alerted.add(mint);
 
-            // --- STAGE 1: INSTANT ALERT ---
-            const initialMsg = await sendInitialAlert(event);
+            // --- 🕵️‍♂️ STAGE 1: BACKGROUND FORENSIC ---
+            // Alert bhejne se pehle wallet history scan karein
+            const report = await performDeepForensic(event.traderPublicKey);
 
-            // --- STAGE 2: BACKGROUND FORENSIC ---
-            // 2 seconds wait for transaction to settle on chain
-            setTimeout(async () => {
-                const report = await performDeepForensic(event.traderPublicKey);
-                updateAlertWithForensic(initialMsg.message_id, event, report);
-            }, 2500);
+            // AGAR FUNDING DIRTY HAI (Linked to old rugs), TO ALERT NAHI BHEJENGE
+            if (report.risk === "High") {
+                console.log(`❌ BLOCKING SERIAL RUGGER: ${event.name} (Linked History)`);
+                return; 
+            }
 
-        } catch (e) { console.error("Msg Error:", e.message); }
+            // AGAR FUNDING CLEAN HAI, TO ALERT BHEJENGE
+            sendEliteAlert(event, report);
+
+        } catch (e) { }
     });
 
     ws.on('close', () => setTimeout(startListening, 2000));
 }
 
 /**
- * Deep Forensic using Helius API
+ * Helius Wallet Forensic Logic
  */
 async function performDeepForensic(walletAddr) {
     try {
         const response = await axios.post(HELIUS_RPC_URL, {
             jsonrpc: "2.0",
-            id: "my-id",
+            id: "forensic-scan",
             method: "getSignaturesForAddress",
-            params: [walletAddr, { limit: 10 }]
+            params: [walletAddr, { limit: 15 }]
         });
 
-        const signatures = response.data.result || [];
+        const sigs = response.data.result || [];
         
-        // Agar signatures 3 se kam hain, yaani naya/fresh wallet hai
-        if (signatures.length <= 3) {
-            return { risk: "Low", source: "CEX / Fresh Wallet", status: "✅ CLEAN" };
-        } 
-        
-        // Agar bohot zyada transactions hain, to risk zyada hai
-        return { risk: "Medium/High", source: "Linked Wallet", status: "⚠️ SERIAL DEV?" };
+        // Pattern: Fresh Wallet (Zindagi ki pehli 5 transactions)
+        // Ye pattern professional devs ya exchange withdrawals ka hota hai
+        if (sigs.length <= 5) {
+            return { risk: "Low", source: "Fresh/CEX Wallet", status: "✅ CLEAN" };
+        }
+
+        // Agar transactions zyada hain, to iska matlab dev "Old Player" hai (High Risk)
+        return { risk: "High", source: "Linked Wallet", status: "⚠️ RUG RISK" };
 
     } catch (e) {
-        return { risk: "Unknown", source: "Scan Failed", status: "❓ UNCERTAIN" };
+        return { risk: "Medium", source: "Scan Error", status: "❓ UNKNOWN" };
     }
 }
 
-async function sendInitialAlert(event) {
-    const msg = `
-🚀 <b>NEW HIGH-BUY DETECTED</b>
-━━━━━━━━━━━━━━━━━━
-<b>Token:</b> ${event.name}
-<b>Mint:</b> <code>${event.mint}</code>
-<b>Dev Buy:</b> ${event.solAmount.toFixed(2)} SOL
-<b>Forensic:</b> ⏳ Scanning Wallet...
-    `;
-    return bot.sendMessage(CHAT_ID, msg, { parse_mode: 'HTML' });
-}
-
-async function updateAlertWithForensic(msgId, event, report) {
+function sendEliteAlert(event, report) {
     const twitter = event.twitter ? `<a href="${event.twitter}">Twitter</a>` : "None";
     
-    const updatedMsg = `
-${report.status} <b>FORENSIC COMPLETE</b>
+    const msg = `
+🌟 <b>ELITE CLEAN LAUNCH</b>
 ━━━━━━━━━━━━━━━━━━
 <b>Token:</b> ${event.name} (<code>${event.symbol}</code>)
 <b>Mint:</b> <code>${event.mint}</code>
 
-📊 <b>ANALYSIS:</b>
+📊 <b>FORENSIC ANALYSIS:</b>
+├ <b>Dev Buy:</b> <code>${event.solAmount.toFixed(2)}</code> SOL ✅
 ├ <b>Funding:</b> <code>${report.source}</code>
 ├ <b>Risk Level:</b> <code>${report.risk}</code>
 └ <b>Twitter:</b> ${twitter}
 
-🚨 <b>ADVICE:</b>
-Check Solscan for funding. If linked to old rugs, <b>DO NOT BUY.</b>
+🛠 <b>QUICK TOOLS:</b>
+📊 <a href="https://dexscreener.com/solana/${event.mint}"><b>DexScreener</b></a>
+📦 <a href="https://rugcheck.xyz/tokens/${event.mint}"><b>RugCheck</b></a>
+⛓ <a href="https://solscan.io/token/${event.mint}"><b>Solscan</b></a>
 
-💰 <a href="https://bullx.io/terminal?chain=solana&address=${event.mint}"><b>BullX Snipe</b></a> | ⛓ <a href="https://solscan.io/token/${event.mint}"><b>Solscan</b></a>
+💰 <b>TRADE FAST:</b>
+⚡ <a href="https://bullx.io/terminal?chain=solana&address=${event.mint}"><b>BullX Terminal</b></a>
+🪐 <a href="https://jup.ag/swap/SOL-${event.mint}"><b>Jupiter Swap</b></a>
     `;
-    
-    bot.editMessageText(updatedMsg, {
-        chat_id: CHAT_ID,
-        message_id: msgId,
-        parse_mode: 'HTML',
-        disable_web_page_preview: true
-    }).catch(e => console.log("Edit Error"));
+
+    bot.sendMessage(CHAT_ID, msg, { 
+        parse_mode: 'HTML', 
+        disable_web_page_preview: true 
+    });
 }
 
 startListening();
