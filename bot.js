@@ -9,7 +9,9 @@ const CEX_SIGNATURES = ["9Wz2n", "66pPj", "5VC9e", "AC56n", "ASTy", "Bybit", "Bi
 const TEST_TOKENS = [
     "ACtfUWtgvaXrQGNMiohTusi5jcx5RJf5zwu9aAxkpump", // Real ✅
     "BFiGUxnidogqcZAPVPDZRCfhx3nXnFLYqpQUaUGpump", // Real ✅
-    "DiNCVMS3GRSxrWSC4REh7VZeppQ3DEkx8UjJt4u94nHR"  // Rug ❌
+    "DiNCVMS3GRSxrWSC4REh7VZeppQ3DEkx8UjJt4u94nHR" ,
+    "Feyunx35PGinFaDPe7KsJudTXFKiW49TVMSC1iH9pump"
+    // Rug ❌
 ];
 
 async function runEliteForensic() {
