@@ -7,21 +7,17 @@ const axios = require('axios');
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const PUMP_WS_URL = 'wss://pumpportal.fun/api/data';
+const HELIUS_RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
 const alerted = new Set();
 
-/**
- * Sniper Engine with Social & Rug Filters
- */
 function startListening() {
     const ws = new WebSocket(PUMP_WS_URL);
 
     ws.on('open', () => {
-        console.log('🛡️ ELITE ANTI-RUG SNIPER ACTIVE');
-        console.log('Logic: Socials + High Buy = Instant | No Socials = 15s Scan');
+        console.log('💎 MUSHTAQ DUAL-FORENSIC SNIPER LIVE');
         ws.send(JSON.stringify({ "method": "subscribeNewToken" }));
-        ws.send(JSON.stringify({ "method": "subscribeTokenTrade" }));
     });
 
     ws.on('message', async (data) => {
@@ -31,80 +27,91 @@ function startListening() {
             if (!mint || alerted.has(mint)) return;
 
             const devBuy = event.solAmount || 0;
-            // Socials check (Twitter/Website/Telegram)
-            const hasSocials = !!(event.twitter || event.website || event.telegram);
+            if (devBuy < 1.0) return; // 1.0 SOL filter
 
-            // --- 🎯 THE ELITE ANTI-RUG FILTERS ---
+            alerted.add(mint);
 
-            // TRACK 1: INSTANT ALERT (The Real Professional Standard)
-            // Dev Buy >= 1.5 SOL AUR Social Links lazmi hain.
-            if (devBuy >= 1.5 && hasSocials) {
-                alerted.add(mint);
-                sendEliteAlert(event, "🚀 ELITE BUNDLE (INSTANT)", "ULTRA-HIGH");
-            } 
+            // --- STAGE 1: INSTANT ALERT ---
+            const initialMsg = await sendInitialAlert(event);
 
-            // TRACK 2: VERIFIED TRACK (Potential Rugs or Small Bundles)
-            // Agar dev buy acha hai (0.8+ SOL) lekin SOCIALS NAHI hain (Jaise GOONICIDE)
-            // To hum isay 15 seconds wait karwayenge aur RugCheck score scan karenge.
-            else if (devBuy >= 0.8) {
-                alerted.add(mint);
-                console.log(`⏳ Scanning ${event.name} (Waiting for RugCheck)...`);
-                
-                setTimeout(async () => {
-                    const report = await axios.get(`https://api.rugcheck.xyz/v1/tokens/${mint}/report`)
-                        .then(r => r.data)
-                        .catch(() => null);
+            // --- STAGE 2: BACKGROUND FORENSIC ---
+            // 2 seconds wait for transaction to settle on chain
+            setTimeout(async () => {
+                const report = await performDeepForensic(event.traderPublicKey);
+                updateAlertWithForensic(initialMsg.message_id, event, report);
+            }, 2500);
 
-                    // Score < 400 (Good/Warning) pass hoga. Danger/Rug block hoga.
-                    if (report && report.score < 400) {
-                        sendEliteAlert(event, "🚨 SAFE VERIFIED LAUNCH", "MEDIUM", report.score);
-                    } else {
-                        console.log(`❌ BLOCKING RUG: ${event.name} (Score: ${report ? report.score : 'High Risk'})`);
-                    }
-                }, 15000); // 15s delay to let RugCheck index the transactions
-            }
-
-        } catch (e) { }
+        } catch (e) { console.error("Msg Error:", e.message); }
     });
 
-    ws.on('close', () => {
-        console.log('♻️ Reconnecting...');
-        setTimeout(startListening, 2000);
-    });
+    ws.on('close', () => setTimeout(startListening, 2000));
 }
 
 /**
- * Enhanced Alert Template
+ * Deep Forensic using Helius API
  */
-function sendEliteAlert(event, title, conviction, score = "N/A") {
-    const twitter = event.twitter ? `<a href="${event.twitter}">Twitter</a>` : "None";
-    const website = event.website ? `<a href="${event.website}">Website</a>` : "None";
+async function performDeepForensic(walletAddr) {
+    try {
+        const response = await axios.post(HELIUS_RPC_URL, {
+            jsonrpc: "2.0",
+            id: "my-id",
+            method: "getSignaturesForAddress",
+            params: [walletAddr, { limit: 10 }]
+        });
 
+        const signatures = response.data.result || [];
+        
+        // Agar signatures 3 se kam hain, yaani naya/fresh wallet hai
+        if (signatures.length <= 3) {
+            return { risk: "Low", source: "CEX / Fresh Wallet", status: "✅ CLEAN" };
+        } 
+        
+        // Agar bohot zyada transactions hain, to risk zyada hai
+        return { risk: "Medium/High", source: "Linked Wallet", status: "⚠️ SERIAL DEV?" };
+
+    } catch (e) {
+        return { risk: "Unknown", source: "Scan Failed", status: "❓ UNCERTAIN" };
+    }
+}
+
+async function sendInitialAlert(event) {
     const msg = `
-${title}
+🚀 <b>NEW HIGH-BUY DETECTED</b>
+━━━━━━━━━━━━━━━━━━
+<b>Token:</b> ${event.name}
+<b>Mint:</b> <code>${event.mint}</code>
+<b>Dev Buy:</b> ${event.solAmount.toFixed(2)} SOL
+<b>Forensic:</b> ⏳ Scanning Wallet...
+    `;
+    return bot.sendMessage(CHAT_ID, msg, { parse_mode: 'HTML' });
+}
+
+async function updateAlertWithForensic(msgId, event, report) {
+    const twitter = event.twitter ? `<a href="${event.twitter}">Twitter</a>` : "None";
+    
+    const updatedMsg = `
+${report.status} <b>FORENSIC COMPLETE</b>
 ━━━━━━━━━━━━━━━━━━
 <b>Token:</b> ${event.name} (<code>${event.symbol}</code>)
 <b>Mint:</b> <code>${event.mint}</code>
 
 📊 <b>ANALYSIS:</b>
-├ <b>Conviction:</b> <code>${conviction}</code>
-├ <b>Dev Buy:</b> <code>${(event.solAmount || 0).toFixed(2)}</code> SOL ✅
-├ <b>RugScore:</b> <code>${score}</code>
-├ <b>Twitter:</b> ${twitter}
-└ <b>Website:</b> ${website}
+├ <b>Funding:</b> <code>${report.source}</code>
+├ <b>Risk Level:</b> <code>${report.risk}</code>
+└ <b>Twitter:</b> ${twitter}
 
-🛠 <b>TOOLS:</b>
-📦 <a href="https://rugcheck.xyz/tokens/${event.mint}"><b>RugCheck</b></a> | ⛓ <a href="https://solscan.io/token/${event.mint}"><b>Solscan</b></a>
+🚨 <b>ADVICE:</b>
+Check Solscan for funding. If linked to old rugs, <b>DO NOT BUY.</b>
 
-💰 <b>TRADE:</b>
-🪐 <a href="https://jup.ag/swap/SOL-${event.mint}"><b>Jupiter</b></a> | ⚡ <a href="https://bullx.io/terminal?chain=solana&address=${event.mint}"><b>BullX</b></a>
-📊 <a href="https://dexscreener.com/solana/${event.mint}"><b>DexScreener</b></a>
+💰 <a href="https://bullx.io/terminal?chain=solana&address=${event.mint}"><b>BullX Snipe</b></a> | ⛓ <a href="https://solscan.io/token/${event.mint}"><b>Solscan</b></a>
     `;
-
-    bot.sendMessage(CHAT_ID, msg, { 
-        parse_mode: 'HTML', 
-        disable_web_page_preview: true 
-    });
+    
+    bot.editMessageText(updatedMsg, {
+        chat_id: CHAT_ID,
+        message_id: msgId,
+        parse_mode: 'HTML',
+        disable_web_page_preview: true
+    }).catch(e => console.log("Edit Error"));
 }
 
 startListening();
