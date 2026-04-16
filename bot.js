@@ -27,8 +27,15 @@ async function runTest() {
         console.log(`🔍 Checking Token: ${mint}`);
         try {
             // 1. Pump.fun API se Token ka Dev/Creator Wallet nikalna
-            const coinData = await axios.get(`https://frontend-api.pump.fun/coins/${mint}`).then(r => r.data);
-            
+            const coinData = await axios.get(`https://frontend-api.pump.fun/coins/${mint}`, {
+    headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+        "Origin": "https://pump.fun",
+        "Referer": "https://pump.fun/"
+    }
+}).then(r => r.data);
+
             if (!coinData || !coinData.creator) {
                 console.log(`⚠️ Token data not found on Pump.fun API.\n`);
                 continue;
