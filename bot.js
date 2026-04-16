@@ -3,7 +3,6 @@ const axios = require('axios');
 
 const HELIUS_RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
 
-// Forensic List
 const TEST_TOKENS = [
     "7voyyzYZVgZSmpzVqVZekmyZMtz1u7Cn29b84bVpump",
     "ACtfUWtgvaXrQGNMiohTusi5jcx5RJf5zwu9aAxkpump",
@@ -14,67 +13,70 @@ const TEST_TOKENS = [
     "3vvDYGkavdt1FNoUw1r5YxDTA6SrWRbHtUV72Ltkpump"
 ];
 
-async function runPerfectedTest() {
-    console.log("🚀 STARTING JUNNI'S PERFECTED FORENSIC TEST...\n");
+async function runTest() {
+    console.log("🚀 STARTING FINAL REPAIRED TEST...\n");
 
     for (let mint of TEST_TOKENS) {
         try {
-            console.log(`🔍 Analyzing: ${mint}`);
-
-            // STEP 1: Get Asset via Helius (Metadata + Creator)
-            const assetRes = await axios.post(HELIUS_RPC_URL, {
-                jsonrpc: "2.0",
-                id: "get-asset",
+            const res = await axios.post(HELIUS_RPC_URL, {
+                jsonrpc: "2.0", id: "f",
                 method: "getAsset",
                 params: { id: mint }
             });
 
-            const asset = assetRes.data.result;
+            const asset = res.data.result;
             if (!asset) {
-                console.log("   ❌ Error: Token not found on-chain yet.\n");
+                console.log(`❌ Token ${mint} not found.\n`);
                 continue;
             }
 
-            // Correct Logic to find Creator and Socials
-            const creator = asset.authorities?.[0]?.address || asset.creator?.address || "Unknown";
-            const metadata = asset.content?.metadata || {};
-            
-            // Helius metadata links usually inside 'links' or 'attributes'
-            const hasSocials = asset.content?.links?.twitter || asset.content?.links?.website || asset.content?.links?.telegram || false;
+            // --- 🔎 FIX 1: FINDING THE TRUE CREATOR ---
+            // Helius creators array mein aksar pehla address hi real dev hota hai
+            const creatorData = asset.creators?.find(c => c.share > 0) || asset.creators?.[0];
+            const creator = creatorData ? creatorData.address : "Unknown";
 
+            // --- 🔗 FIX 2: FINDING SOCIALS (Deep Scan) ---
+            // Socials kabhi content.links mein hote hain, kabhi attributes mein
+            const metadataStr = JSON.stringify(asset.content?.metadata || {}).toLowerCase();
+            const hasSocials = metadataStr.includes("twitter") || 
+                               metadataStr.includes("t.me") || 
+                               metadataStr.includes("http");
+
+            console.log(`🔍 Mint: ${mint}`);
             console.log(`   ├ Dev Address: ${creator}`);
-            console.log(`   ├ Socials Detected: ${hasSocials ? "✅ YES" : "❌ NO"}`);
+            console.log(`   ├ Socials: ${hasSocials ? "✅ Found" : "❌ None"}`);
 
-            // STEP 2: Deep Forensic based on Wallet Transaction Signatures
-            const forensic = await performDeepForensic(creator);
+            if (creator === "Unknown") {
+                console.log(`   └ Result: ❌ REJECTED (Unknown Dev)\n`);
+                continue;
+            }
+
+            // --- 🛡️ STEP 2: FORENSIC ---
+            const forensic = await performForensic(creator);
+            const status = (hasSocials && forensic.isClean) ? "🌟 ELITE PASS" : "❌ REJECTED";
             
-            const finalResult = (hasSocials && forensic.isClean) ? "✅ ELITE PASS" : "❌ REJECTED";
-            console.log(`   └ Forensic Result: ${finalResult} (${forensic.source})\n`);
+            console.log(`   └ Forensic: ${status} (${forensic.source})\n`);
 
-        } catch (err) {
-            console.log(`   ❌ Error: ${err.message}\n`);
-        }
+        } catch (e) { console.log(`   ❌ Error: ${e.message}\n`); }
         await new Promise(r => setTimeout(r, 1000));
     }
 }
 
-async function performDeepForensic(walletAddr) {
-    if (walletAddr === "Unknown") return { isClean: false, source: "Incomplete Data" };
-    
+async function performForensic(walletAddr) {
     try {
-        const sigRes = await axios.post(HELIUS_RPC_URL, {
-            jsonrpc: "2.0", id: "sigs",
+        const res = await axios.post(HELIUS_RPC_URL, {
+            jsonrpc: "2.0", id: "s",
             method: "getSignaturesForAddress",
             params: [walletAddr, { limit: 20 }]
         });
-        const sigs = sigRes.data.result || [];
+        const sigs = res.data.result || [];
         
-        // RULE: Professional Devs use fresh wallets (Max 10 signatures)
+        // Elite Devs: 1-12 transactions (Binance to Pump.fun flow)
         if (sigs.length > 0 && sigs.length <= 12) {
-            return { isClean: true, source: "Fresh/Elite Wallet" };
+            return { isClean: true, source: "Fresh/Elite" };
         }
-        return { isClean: false, source: `Dirty Wallet (${sigs.length} TXs)` };
+        return { isClean: false, source: `Dirty (${sigs.length} TXs)` };
     } catch (e) { return { isClean: false, source: "Scan Fail" }; }
 }
 
-runPerfectedTest();
+runTest();
