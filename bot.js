@@ -1,15 +1,11 @@
 require('dotenv').config();
 const axios = require('axios');
 
-// Apna Helius API key yahan load ho jayega
 const HELIUS_RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
 
-const KNOWN_EXCHANGES = [
-    'Binance', 'OKX', 'Bybit', 'Kraken', 'MEXC', 
-    'KuCoin', 'FixedFloat', 'ChangeNOW', 'Gate.io', 'Circle'
-];
+const KNOWN_EXCHANGES = ['Binance', 'OKX', 'Bybit', 'FixedFloat', 'MEXC', 'Kraken'];
 
-// 🛑 JUNNI BHAI YAHAN APNE TOKEN ADDRESSES (MINTS) DAALEIN 🛑
+// TEST ADDRESSES
 const TEST_TOKENS = [
     "7voyyzYZVgZSmpzVqVZekmyZMtz1u7Cn29b84bVpump", // Real Token example
      "ACtfUWtgvaXrQGNMiohTusi5jcx5RJf5zwu9aAxkpump",
@@ -19,81 +15,59 @@ const TEST_TOKENS = [
     "DiNCVMS3GRSxrWSC4REh7VZeppQ3DEkx8UjJt4u94nHR" ,
     "3vvDYGkavdt1FNoUw1r5YxDTA6SrWRbHtUV72Ltkpump" 
 ];
-
 async function runTest() {
-    console.log("🚀 JUNNI'S FORENSIC TESTER STARTED...\n");
+    console.log("🚀 STARTING HELIUS-BASED FORENSIC TEST...\n");
 
     for (let mint of TEST_TOKENS) {
-        console.log(`🔍 Checking Token: ${mint}`);
         try {
-            // 1. Pump.fun API se Token ka Dev/Creator Wallet nikalna
-            const coinData = await axios.get(`https://frontend-api.pump.fun/coins/${mint}`, {
-    headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "application/json",
-        "Origin": "https://pump.fun",
-        "Referer": "https://pump.fun/"
-    }
-}).then(r => r.data);
+            console.log(`🔍 Analyzing: ${mint}`);
 
-            if (!coinData || !coinData.creator) {
-                console.log(`⚠️ Token data not found on Pump.fun API.\n`);
+            // STEP 1: Get Metadata & Creator via Helius
+            const response = await axios.post(HELIUS_RPC_URL, {
+                jsonrpc: "2.0",
+                id: "my-id",
+                method: "getAsset",
+                params: { id: mint }
+            });
+
+            const asset = response.data.result;
+            if (!asset) {
+                console.log("   ❌ Error: Asset not found on Helius.\n");
                 continue;
             }
 
-            const creatorWallet = coinData.creator;
-            console.log(`   ├ Dev Wallet: ${creatorWallet}`);
+            const creator = asset.authorities?.[0]?.address || "Unknown";
+            const metadata = asset.content?.metadata || {};
+            const twitter = metadata.twitter || "None";
 
-            // 2. Wallet ka Forensic Run karna
-            const report = await performAdvancedForensic(creatorWallet);
+            console.log(`   ├ Dev: ${creator}`);
+            console.log(`   ├ Socials: ${twitter !== "None" ? "✅ Found" : "❌ None"}`);
 
-            // 3. Result Print karna
-            const status = report.isClean ? "✅ PASS (CLEAN)" : "❌ FAIL (RUG/DIRTY)";
-            console.log(`   ├ Result: ${status}`);
-            console.log(`   └ Funding Source: ${report.source}\n`);
+            // STEP 2: Run Forensic
+            const report = await performForensic(creator);
+            console.log(`   └ Forensic: ${report.isClean ? "✅ PASS" : "❌ FAIL"} (${report.source})\n`);
 
-        } catch (error) {
-            console.log(`   ❌ Error testing ${mint}: ${error.message}\n`);
+        } catch (err) {
+            console.log(`   ❌ API Error: ${err.message}\n`);
         }
-        
-        // API rate limit se bachne ke liye 1 second ka gap
         await new Promise(r => setTimeout(r, 1000));
     }
-    console.log("🏁 TEST COMPLETE!");
 }
 
-async function performAdvancedForensic(walletAddr) {
+async function performForensic(walletAddr) {
     try {
-        const response = await axios.post(HELIUS_RPC_URL, {
-            jsonrpc: "2.0", id: "test-scan",
-            method: "getTransactions",
+        const res = await axios.post(HELIUS_RPC_URL, {
+            jsonrpc: "2.0", id: "f",
+            method: "getSignaturesForAddress",
             params: [walletAddr, { limit: 10 }]
         });
-
-        const txs = response.data.result || [];
-        if (txs.length === 0) return { isClean: true, source: "Brand New" };
-
-        const firstTx = txs[txs.length - 1];
-        const description = firstTx.description || "";
-        const sender = firstTx.nativeTransfers?.[0]?.fromUserAccount || "";
-
-        const nameMatch = KNOWN_EXCHANGES.find(ex => description.toLowerCase().includes(ex.toLowerCase()));
-        if (nameMatch) return { isClean: true, source: `Verified ${nameMatch}` };
-
-        if (sender.startsWith("9Wz2") || sender.startsWith("66pP") || sender.startsWith("ASTy")) {
-            return { isClean: true, source: "CEX Proxy Wallet (Verified)" };
-        }
-
-        if (txs.length <= 5) {
+        const sigs = res.data.result || [];
+        
+        if (sigs.length > 0 && sigs.length <= 10) {
             return { isClean: true, source: "Fresh Professional Wallet" };
         }
-
-        return { isClean: false, source: "Linked Personal Wallet (Risk)" };
-
-    } catch (e) {
-        return { isClean: false, source: "Scan Error" };
-    }
+        return { isClean: false, source: "Linked/Old Wallet" };
+    } catch (e) { return { isClean: false, source: "Scan Error" }; }
 }
 
-// Test start karein
 runTest();
