@@ -4,6 +4,7 @@ const axios = require('axios');
 const HELIUS_RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
 
 const TEST_TOKENS = [
+    "DiNCVMS3GRSxrWSC4REh7VZeppQ3DEkx8UjJt4u94nHR",
     "7voyyzYZVgZSmpzVqVZekmyZMtz1u7Cn29b84bVpump",
     "ACtfUWtgvaXrQGNMiohTusi5jcx5RJf5zwu9aAxkpump",
     "BFiGUxnidogqcZAPVPDZRCfhx3nXnFLYqpQUaUGpump"
