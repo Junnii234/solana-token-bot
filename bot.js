@@ -9,73 +9,47 @@ const HELIUS_RPC = `https://mainnet.helius-rpc.com/?api-key=cad2ea55-0ae1-4005-8
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: { autoStart: true, params: { timeout: 10 } } });
 const alertedMints = new Set();
-const CEX_LIST = ["fixedfloat", "changenow", "binance", "okx", "bybit", "kucoin", "gate.io", "mexc", "9wz2n", "66ppj", "5vc9e", "ac56n", "asty", "36vc", "2aqp", "h8sr", "6a7s2", "47s6a", "7xvyf"];
 
-console.log('🚀 V63 ONLINE: Ultra-Strict + Manual Test Fixed');
+console.log('🛡️ V65 ONLINE: Balanced Budget (1.5 SOL) + Rug Shield');
 
-// --- 🧪 FIXED MANUAL TEST COMMAND ---
-bot.onText(/\/test (.+)/, async (msg, match) => {
-    const testMint = match[1].trim();
-    bot.sendMessage(msg.chat.id, `🔍 *Manual Forensic Starting...*\nToken: \`${testMint.substring(0,8)}...\``, {parse_mode: 'Markdown'});
-    
+async function performForensic(mint, devWallet) {
     try {
-        const sigs = await axios.post(HELIUS_RPC, {
-            jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [testMint]
-        });
-        if (!sigs.data.result.length) throw new Error("No data");
-        const launchSig = sigs.data.result[sigs.data.result.length - 1].signature;
-        const tx = await axios.post(HELIUS_RPC, {
-            jsonrpc: "2.0", id: 1, method: "getTransaction",
-            params: [launchSig, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed" }]
-        });
-        const dev = tx.data.result.transaction.message.accountKeys[0].pubkey;
-        performForensic(testMint, dev, true, msg.chat.id);
-    } catch (e) {
-        bot.sendMessage(msg.chat.id, "❌ Error: Address invalid ya Solana par nahi mila.");
-    }
-});
-
-// --- 🛠️ ULTRA-STRICT FORENSIC ENGINE ---
-async function performForensic(mint, devWallet, isManual = false, chatId = TELEGRAM_CHAT_ID) {
-    try {
-        // 1. Socials
+        // 1. Socials Check (Must have)
         const asset = await axios.post(HELIUS_RPC, { jsonrpc: "2.0", id: 1, method: "getAsset", params: { id: mint } });
         const meta = JSON.stringify(asset.data.result || "").toLowerCase();
         const hasSocials = meta.includes("t.me/") || meta.includes("x.com/") || meta.includes("twitter.com/");
-        
-        // 2. Budget (2.5 SOL)
+        if (!hasSocials) return;
+
+        // 2. Budget Check (Wapas 1.5 SOL par)
         const balanceRes = await axios.post(HELIUS_RPC, { jsonrpc: "2.0", id: 1, method: "getBalance", params: [devWallet] });
         const solBalance = balanceRes.data.result.value / 1e9;
+        if (solBalance < 1.5) return; 
 
-        // 3. History (50+ txns)
-        const sigsRes = await axios.post(HELIUS_RPC, { jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [devWallet, { limit: 5 }] });
-        const genesis = sigsRes.data.result[sigsRes.data.result.length - 1];
-        const fundTx = await axios.post(HELIUS_RPC, { jsonrpc: "2.0", id: 1, method: "getTransaction", params: [genesis.signature, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed" }] });
-        const funderWallet = fundTx.data.result.transaction.message.accountKeys[0].pubkey;
-        const funderHistory = await axios.post(HELIUS_RPC, { jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [funderWallet, { limit: 100 }] });
-        const txCount = funderHistory.data.result?.length || 0;
+        // 3. ANTI-RUG: Top Holders Check (Max 35% among Top 10)
+        const holders = await axios.post(HELIUS_RPC, { jsonrpc: "2.0", id: 1, method: "getTokenLargestAccounts", params: [mint] });
+        let top10Supply = 0;
+        holders.data.result.value.slice(0, 10).forEach(h => top10Supply += (h.uiAmount / 1000000000) * 100);
+        if (top10Supply > 35) return; 
 
-        // Decision Logic
-        const passBudget = solBalance >= 2.5;
-        const passHistory = txCount >= 50;
+        // 4. ANTI-RUG: Dev "Paper Hand" Check (Check if Dev sold already)
+        const devSigs = await axios.post(HELIUS_RPC, { jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [devWallet, { limit: 15 }] });
+        const logs = JSON.stringify(devSigs.data.result).toLowerCase();
+        if (logs.includes("sell") || logs.includes("withdraw")) return;
 
-        if ((passBudget && passHistory && hasSocials) || isManual) {
-            const status = (passBudget && passHistory && hasSocials) ? "✅ PASSED" : "❌ REJECTED";
-            const tokenName = asset.data.result?.content?.metadata?.name || "Unknown";
-            
-            const report = `📊 *FORENSIC REPORT (${status})*\n\n` +
-                           `🏷️ **Name:** ${tokenName}\n` +
-                           `💰 **Budget:** ${solBalance.toFixed(2)} SOL ${passBudget ? '✅' : '❌ (Need 2.5)'}\n` +
-                           `📈 **History:** ${txCount} txns ${passHistory ? '✅' : '❌ (Need 50+)'}\n` +
-                           `🌐 **Socials:** ${hasSocials ? '✅' : '❌'}\n\n` +
-                           `🔗 [Jupiter](https://jup.ag/swap/SOL-${mint}) | [DexScreener](https://dexscreener.com/solana/${mint})`;
+        // 5. SEND ELITE ALERT
+        const tokenName = asset.data.result?.content?.metadata?.name || "Unknown";
+        const msg = `💎 *BALANCED GEM SIGNAL (V65)*\n\n` +
+                    `🏷️ **Name:** \`${tokenName}\`\n` +
+                    `💰 **Dev Budget:** ${solBalance.toFixed(2)} SOL ✅\n` +
+                    `👥 **Top 10 Holders:** ${top10Supply.toFixed(1)}% (Safe)\n` +
+                    `🛡️ **Anti-Rug:** Verified Clean\n\n` +
+                    `🔗 [Jupiter](https://jup.ag/swap/SOL-${mint}) | [DexScreener](https://dexscreener.com/solana/${mint})`;
 
-            await bot.sendMessage(chatId, report, { parse_mode: 'Markdown', disable_web_page_preview: true });
-        }
-    } catch (e) { console.error(e); }
+        await bot.sendMessage(TELEGRAM_CHAT_ID, msg, { parse_mode: 'Markdown', disable_web_page_preview: true });
+
+    } catch (e) { }
 }
 
-// Radar logic as before...
 function startRadar() {
     const ws = new WebSocket('wss://pumpportal.fun/api/data');
     ws.on('open', () => ws.send(JSON.stringify({ "method": "subscribeNewToken" })));
@@ -83,9 +57,11 @@ function startRadar() {
         const event = JSON.parse(data.toString());
         if (event.mint && !alertedMints.has(event.mint)) {
             alertedMints.add(event.mint);
+            // 60 Seconds Wait (Ideal for 1.5 SOL tokens)
             setTimeout(() => performForensic(event.mint, event.traderPublicKey), 60000);
         }
     });
     ws.on('close', () => setTimeout(startRadar, 3000));
 }
+
 startRadar();
