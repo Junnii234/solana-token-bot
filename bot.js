@@ -3,97 +3,84 @@ const TelegramBot = require('node-telegram-bot-api');
 const WebSocket = require('ws');
 const axios = require('axios');
 
-// --- 1. CONFIGURATION ---
 const TELEGRAM_TOKEN = "8758743414:AAGUbb0kA9fPMfU-diX7-lVVal7cxzOTqTM";
 const TELEGRAM_CHAT_ID = "8006731872";
-const HELIUS_API_KEY = "cad2ea55-0ae1-4005-8b8a-3b04167a57fb";
-const HELIUS_RPC = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`;
+const HELIUS_RPC = `https://mainnet.helius-rpc.com/?api-key=cad2ea55-0ae1-4005-8b8a-3b04167a57fb`;
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
-const alerted = new Set();
-const CEX_LIST = ["Binance", "OKX", "Bybit", "FixedFloat", "ChangeNOW", "Gate.io", "Kucoin"];
+const alertedMints = new Set();
 
-// --- 2. THE RADAR (WebSocket from bot (4).js) ---
+// TESTED CEX SIGNATURES ONLY
+const CEX_SIGNATURES = ["9Wz2n", "66pPj", "5VC9e", "AC56n", "ASTy", "36vC", "2AQp", "H8sR", "6V9p", "FixedFloat", "ChangeNOW", "Binance", "Bybit", "OKX", "Bitget", "Gate.io", "Kucoin"];
+
 function startRadar() {
     const ws = new WebSocket('wss://pumpportal.fun/api/data');
 
     ws.on('open', () => {
-        console.log('🛡️ V48: RADAR ONLINE - HUNTING PUMP.FUN...');
+        console.log('🛡️ V50: CEX-ONLY MODE (Anti-Fraud Active)');
         ws.send(JSON.stringify({ "method": "subscribeNewToken" }));
     });
 
     ws.on('message', async (data) => {
         try {
             const event = JSON.parse(data.toString());
-            if (!event.mint || alerted.has(event.mint)) return;
+            if (!event.mint || alertedMints.has(event.mint)) return;
             
-            // Minimal filter to catch everything first
-            alerted.add(event.mint);
-            console.log(`\n🎯 DETECTED: ${event.symbol} | Analyzing...`);
-            
-            // Deep Forensic start karein
+            alertedMints.add(event.mint);
             performForensic(event.mint, event.traderPublicKey);
         } catch (e) { }
     });
 
-    ws.on('close', () => {
-        console.log("⚠️ Radar Connection Lost. Reconnecting...");
-        setTimeout(startRadar, 3000);
-    });
+    ws.on('close', () => setTimeout(startRadar, 3000));
 }
 
-// --- 3. THE FORENSIC ENGINE (Upgraded from bot (5).js) ---
 async function performForensic(mint, devWallet) {
     try {
-        // Step 1: Check Socials (Helius Asset API)
+        // 1. Socials Check (Mandatory)
         const asset = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, method: "getAsset", params: { id: mint }
         });
-        const data = JSON.stringify(asset.data.result || "").toLowerCase();
-        const hasSocials = data.includes("t.me/") || data.includes("x.com/") || data.includes("twitter.com/");
+        const meta = JSON.stringify(asset.data.result || "").toLowerCase();
+        const hasSocials = meta.includes("t.me/") || meta.includes("x.com/") || meta.includes("twitter.com/");
 
-        // Step 2: Dev Wallet Analysis (History + Age)
+        if (!hasSocials) return; // Silent skip if no socials
+
+        // 2. CEX Funding Check (Mandatory)
         const sigsRes = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [devWallet, { limit: 100 }]
         });
         const sigs = sigsRes.data.result || [];
-        const txCount = sigs.length;
-        
-        // Age calculation
-        const genesis = sigs[sigs.length - 1];
-        const ageMins = (Date.now() / 1000 - genesis.blockTime) / 60;
+        if (sigs.length === 0) return;
 
-        // Step 3: CEX Funding Check
+        const genesis = sigs[sigs.length - 1];
         const fundTx = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, method: "getTransaction",
             params: [genesis.signature, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed" }]
         });
-        const fundLogs = JSON.stringify(fundTx.data.result?.meta?.logMessages || "").toLowerCase();
-        const isCEX = CEX_LIST.some(cex => fundLogs.includes(cex.toLowerCase()));
+        
+        const logs = JSON.stringify(fundTx.data.result?.meta?.logMessages || "").toLowerCase();
+        
+        // CHECKING IF FUNDER IS FROM CEX LIST
+        const isCEX = CEX_SIGNATURES.some(cex => logs.includes(cex.toLowerCase()));
 
-        console.log(`   📊 Stats: Age: ${ageMins.toFixed(0)}m | Txs: ${txCount} | CEX: ${isCEX ? '✅' : '❌'}`);
-
-        // --- CRITERIA (The Elite Filter) ---
-        // Alert bhejien agar: CEX funding ho OR Wallet 3h+ purana ho OR History 20+ txs ho (AND Socials lazmi hon)
-        if ((isCEX || ageMins > 180 || txCount > 20) && hasSocials) {
-            const msg = `🌟 *ELITE SIGNAL SPOTTED (V48)*\n\n` +
+        if (isCEX) {
+            const ageMins = (Date.now() / 1000 - genesis.blockTime) / 60;
+            const msg = `🌟 *CEX VERIFIED SIGNAL (V50)*\n\n` +
                         `📍 Mint: \`${mint}\`\n` +
-                        `💰 Fund: ${isCEX ? 'CEX Verified ✅' : 'Personal Wallet'}\n` +
-                        `🕒 Dev Age: ${ageMins.toFixed(0)} mins\n` +
-                        `📊 Dev History: ${txCount} txs\n\n` +
+                        `💰 Funding: *CEX/Exchange Detected* ✅\n` +
+                        `🕒 Dev Age: ${ageMins.toFixed(0)} mins\n\n` +
                         `🔗 [DexScreener](https://dexscreener.com/solana/${mint})`;
 
             await bot.sendMessage(TELEGRAM_CHAT_ID, msg, { parse_mode: 'Markdown' });
-            console.log(`✅ ALERT SENT!`);
+            console.log(`✅ CEX Alert Sent: ${mint.substring(0,5)}`);
         } else {
-            console.log(`   ❌ Rejected: Did not meet Elite criteria.`);
+            console.log(`❌ Skipped: Personal Wallet (Non-CEX)`);
         }
-    } catch (e) { console.log(`   ⚠️ Forensic blip for ${mint.substring(0,5)}`); }
+
+    } catch (e) { 
+        alertedMints.delete(mint); 
+    }
 }
 
-// --- STARTUP ---
-bot.sendMessage(TELEGRAM_CHAT_ID, "✅ *V48 Online:* Webhook-Free Radar Active!");
 startRadar();
-
-// Cache management
-setInterval(() => { if(alerted.size > 2000) alerted.clear(); }, 3600000);
+setInterval(() => alertedMints.clear(), 12 * 60 * 60 * 1000);
