@@ -16,21 +16,24 @@ const SAFE_FUNDS = [
 ];
 
 let scannedSignatures = new Set();
-let scannedMints = new Set(); // Taake aik token 2 baar scan na ho
+let scannedMints = new Set();
 
-// --- 2. THE ENGINE ---
+// --- 2. FORENSIC ENGINE ---
 async function scanToken(mint) {
     if (scannedMints.has(mint)) return;
     scannedMints.add(mint);
     if (scannedMints.size > 1000) scannedMints.clear();
 
     try {
-        console.log(`🔍 Analyzing Mint: ${mint.substring(0,8)}...`);
+        console.log(`\n🔬 LAB TESTING MINT: ${mint.substring(0, 8)}...`);
         
         const sigsRes = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [mint]
         });
-        if (!sigsRes.data.result || sigsRes.data.result.length === 0) return;
+        if (!sigsRes.data.result || sigsRes.data.result.length === 0) {
+            console.log(`   ❌ No history found.`);
+            return;
+        }
 
         const launchSig = sigsRes.data.result[sigsRes.data.result.length - 1].signature;
         const tx = await axios.post(HELIUS_RPC, {
@@ -56,6 +59,9 @@ async function scanToken(mint) {
         const logs = JSON.stringify(fundTx.data.result.meta.logMessages || "").toLowerCase();
         const isSafeFund = SAFE_FUNDS.some(sig => funder.startsWith(sig) || logs.includes(sig.toLowerCase()));
 
+        console.log(`   ├─ Dev Age: ${ageMins.toFixed(0)}m | Txs: ${txCount}`);
+        console.log(`   ├─ Funding: ${isSafeFund ? 'SAFE ✅' : 'Risky ⚠️'} (${funder.substring(0,6)})`);
+
         if ((ageMins > 180 || txCount > 20) && isSafeFund) {
             const asset = await axios.post(HELIUS_RPC, {
                 jsonrpc: "2.0", id: 1, method: "getAsset", params: { id: mint }
@@ -72,18 +78,25 @@ async function scanToken(mint) {
                             `🔗 [DexScreener](https://dexscreener.com/solana/${mint})`;
                 
                 await bot.sendMessage(TELEGRAM_CHAT_ID, msg, { parse_mode: 'Markdown' });
-                console.log(`✅ ALERT SENT: ${mint}`);
+                console.log(`   🌟 ALERT SENT TO TELEGRAM!`);
+            } else {
+                console.log(`   ❌ Rejected: No Socials`);
             }
+        } else {
+            console.log(`   ❌ Rejected: Failed Elite Criteria`);
         }
-    } catch (e) { /* Silent for speed */ }
+    } catch (e) { 
+        console.log(`   ⚠️ Scan Error: ${e.message}`); 
+    }
 }
 
-// --- 3. LIVE EXTRACTION (THE FIX) ---
+// --- 3. LIVE RADAR EXTRACTION ---
 async function fetchLatestTokens() {
     try {
+        process.stdout.write("."); // Radar blip
         const response = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress",
-            params: ["6EF8rrecthR5DkZJv96tS6pg6W5tTfG9c9X6Lgnn7W6b", { limit: 5 }]
+            params: ["6EF8rrecthR5DkZJv96tS6pg6W5tTfG9c9X6Lgnn7W6b", { limit: 10 }] // Badha kar 10 kar diya
         });
 
         const transactions = response.data.result;
@@ -93,29 +106,31 @@ async function fetchLatestTokens() {
 
             if (scannedSignatures.size > 2000) scannedSignatures.clear();
 
-            // 🛠️ Yahan ghalti thi: Ab yeh code transaction ke andar se MINT nikalega
             const txDetail = await axios.post(HELIUS_RPC, {
                 jsonrpc: "2.0", id: 1, method: "getTransaction",
                 params: [tx.signature, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed" }]
             });
 
-            // Solana (SOL) ke ilawa jo token hoga, usay scan karega
             if (txDetail.data?.result?.meta?.postTokenBalances?.length > 0) {
                 const mint = txDetail.data.result.meta.postTokenBalances[0].mint;
+                // Agar SOL nahi hai, to matlab naya token detect hua hai
                 if (mint !== "So11111111111111111111111111111111111111112") { 
-                    scanToken(mint); // Engine Start!
+                    console.log(`\n🎯 TOKEN SPOTTED IN TX: ${tx.signature.substring(0,10)}...`);
+                    scanToken(mint); 
                 }
             }
         }
-    } catch (e) { /* Error silent */ }
+    } catch (e) { 
+        console.log(`\n📡 API Radar Error: ${e.message}`); 
+    }
 }
 
 // --- START ENGINE ---
-console.log("🔥 AGGRESSIVE SNIPER V41 STARTING...");
+console.log("🔥 AGGRESSIVE SNIPER V42 (LIVE RADAR) STARTING...");
 
-bot.sendMessage(TELEGRAM_CHAT_ID, "✅ *System Online (V41):* Token Extraction Active!\n\nEngine is now pulling live mints directly.")
-   .then(() => console.log("🔔 Startup Alert Sent!"))
+bot.sendMessage(TELEGRAM_CHAT_ID, "✅ *System Online (V42):* Live Radar Active!\n\nYou will now see scanning logs on the server.")
+   .then(() => console.log("🔔 Startup Alert Sent! Radar spinning..."))
    .catch((err) => console.log("❌ Startup Failed."));
 
-setInterval(fetchLatestTokens, 12000); 
-setInterval(() => console.log("💓 Hunting..."), 600000);
+// Radar sweep every 10 seconds
+setInterval(fetchLatestTokens, 10000); 
