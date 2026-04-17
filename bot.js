@@ -60,7 +60,7 @@ async function performForensic(mint, devWallet, isManual = false, chatId = TELEG
         const devDidSell = logs.includes("sell") || logs.includes("withdraw");
 
         // Logic Criteria
-        const passAll = (solBalance >= 1.5) && (top10Supply <= 35) && hasSocials && !devDidSell;
+        const passAll = (solBalance >= 0.2) && (top10Supply <= 35) && hasSocials && !devDidSell;
 
         if (passAll || isManual) {
             const status = passAll ? "✅ PASSED" : "❌ REJECTED";
@@ -68,7 +68,7 @@ async function performForensic(mint, devWallet, isManual = false, chatId = TELEG
             
             const report = `📊 *FORENSIC REPORT (${status})*\n\n` +
                            `🏷️ **Name:** ${tokenName}\n` +
-                           `💰 **Budget:** ${solBalance.toFixed(2)} SOL ${solBalance >= 1.5 ? '✅' : '❌'}\n` +
+                           `💰 **Budget:** ${solBalance.toFixed(2)} SOL ${solBalance >= 0.2 ? '✅' : '❌'}\n` +
                            `👥 **Top 10:** ${top10Supply.toFixed(1)}% ${top10Supply <= 35 ? '✅' : '❌'}\n` +
                            `🛡️ **Dev Sell:** ${devDidSell ? '❌ Detected' : '✅ No Sell'}\n` +
                            `🌐 **Socials:** ${hasSocials ? '✅' : '❌'}\n\n` +
