@@ -11,7 +11,7 @@ const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
 const alertedMints = new Set();
 
 // TESTED CEX SIGNATURES ONLY
-const CEX_SIGNATURES = ["9Wz2n", "66pPj", "5VC9e", "AC56n", "ASTy", "36vC", "2AQp", "H8sR", "6V9p", "FixedFloat", "ChangeNOW", "Binance", "Bybit", "OKX", "Bitget", "Gate.io", "Kucoin"];
+const CEX_SIGNATURES = ["fixedfloat", "changenow", "binance", "okx", "bybit", "kucoin", "gate.io", "mexc", "9wz2n", "66ppj", "5vc9e", "ac56n", "asty", "36vc", "2aqp", "h8sr", "6a7s2", "47s6a", "7xvyf"];
 
 function startRadar() {
     const ws = new WebSocket('wss://pumpportal.fun/api/data');
