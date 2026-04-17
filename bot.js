@@ -2,7 +2,7 @@ require('dotenv').config();
 const axios = require('axios');
 const TelegramBot = require('node-telegram-bot-api');
 
-// --- 1. HARDCODED CREDENTIALS (MUSHTAQ AHMED SPECIAL) ---
+// --- 1. HARDCODED CREDENTIALS ---
 const TELEGRAM_TOKEN = "8758743414:AAGUbb0kA9fPMfU-diX7-lVVal7cxzOTqTM";
 const TELEGRAM_CHAT_ID = "8006731872";
 const HELIUS_API_KEY = "cad2ea55-0ae1-4005-8b8a-3b04167a57fb";
@@ -16,10 +16,17 @@ const SAFE_FUNDS = [
 ];
 
 let scannedSignatures = new Set();
+let scannedMints = new Set(); // Taake aik token 2 baar scan na ho
 
-// --- 2. FORENSIC ENGINE (Aggressive Mode) ---
+// --- 2. THE ENGINE ---
 async function scanToken(mint) {
+    if (scannedMints.has(mint)) return;
+    scannedMints.add(mint);
+    if (scannedMints.size > 1000) scannedMints.clear();
+
     try {
+        console.log(`🔍 Analyzing Mint: ${mint.substring(0,8)}...`);
+        
         const sigsRes = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [mint]
         });
@@ -49,10 +56,6 @@ async function scanToken(mint) {
         const logs = JSON.stringify(fundTx.data.result.meta.logMessages || "").toLowerCase();
         const isSafeFund = SAFE_FUNDS.some(sig => funder.startsWith(sig) || logs.includes(sig.toLowerCase()));
 
-        // --- FILTER CRITERIA ---
-        // 1. Wallet Age > 180 mins (3 Hours)
-        // 2. OR Wallet has 20+ transactions (Active Dev)
-        // 3. AND Socials present
         if ((ageMins > 180 || txCount > 20) && isSafeFund) {
             const asset = await axios.post(HELIUS_RPC, {
                 jsonrpc: "2.0", id: 1, method: "getAsset", params: { id: mint }
@@ -63,7 +66,7 @@ async function scanToken(mint) {
             if (hasSocials) {
                 const msg = `🚀 *AGGRESSIVE ALERT: POTENTIAL MOON*\n\n` +
                             `📍 Mint: \`${mint}\`\n` +
-                            `💰 Fund: ${isSafeFund ? '✅ Safe/Bridge' : '⏳ Private/Old'}\n` +
+                            `💰 Fund: ${isSafeFund ? '✅ Safe/Bridge' : '⏳ Private'}\n` +
                             `🕒 Age: ${ageMins.toFixed(0)} mins\n` +
                             `📊 History: ${txCount} transactions\n\n` +
                             `🔗 [DexScreener](https://dexscreener.com/solana/${mint})`;
@@ -75,7 +78,7 @@ async function scanToken(mint) {
     } catch (e) { /* Silent for speed */ }
 }
 
-// --- 3. LIVE POLLING ---
+// --- 3. LIVE EXTRACTION (THE FIX) ---
 async function fetchLatestTokens() {
     try {
         const response = await axios.post(HELIUS_RPC, {
@@ -90,19 +93,29 @@ async function fetchLatestTokens() {
 
             if (scannedSignatures.size > 2000) scannedSignatures.clear();
 
-            // Note: In production, you'd fetch the transaction and find the mint
-            // This is the trigger point for your forensic scan
-            console.log(`⚡ Analyzing New Pump.fun Activity...`);
+            // 🛠️ Yahan ghalti thi: Ab yeh code transaction ke andar se MINT nikalega
+            const txDetail = await axios.post(HELIUS_RPC, {
+                jsonrpc: "2.0", id: 1, method: "getTransaction",
+                params: [tx.signature, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed" }]
+            });
+
+            // Solana (SOL) ke ilawa jo token hoga, usay scan karega
+            if (txDetail.data?.result?.meta?.postTokenBalances?.length > 0) {
+                const mint = txDetail.data.result.meta.postTokenBalances[0].mint;
+                if (mint !== "So11111111111111111111111111111111111111112") { 
+                    scanToken(mint); // Engine Start!
+                }
+            }
         }
-    } catch (e) { console.log("⚠️ Polling Error..."); }
+    } catch (e) { /* Error silent */ }
 }
 
 // --- START ENGINE ---
-console.log("🔥 AGGRESSIVE SNIPER STARTING...");
+console.log("🔥 AGGRESSIVE SNIPER V41 STARTING...");
 
-bot.sendMessage(TELEGRAM_CHAT_ID, "✅ *System Online (V40):* Aggressive Hunting Active!\n\nCriteria: 3h+ Age | Bridge Support | Socials Required")
+bot.sendMessage(TELEGRAM_CHAT_ID, "✅ *System Online (V41):* Token Extraction Active!\n\nEngine is now pulling live mints directly.")
    .then(() => console.log("🔔 Startup Alert Sent!"))
-   .catch((err) => console.log("❌ Startup Failed: Check your Token/ID."));
+   .catch((err) => console.log("❌ Startup Failed."));
 
-setInterval(fetchLatestTokens, 12000); // 12-second polling to stay safe with API limits
+setInterval(fetchLatestTokens, 12000); 
 setInterval(() => console.log("💓 Hunting..."), 600000);
