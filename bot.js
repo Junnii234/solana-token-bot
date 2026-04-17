@@ -12,69 +12,182 @@ let scannedMints = new Set();
 
 const SAFE_FUNDS = ["9Wz2n", "66pPj", "5VC9e", "FixedFloat", "ChangeNOW", "SideShift", "Binance", "Bybit", "OKX"];
 
-// --- 1. CORE DETECTION (RE-BUILT) ---
+console.log("🔥 AGGRESSIVE SNIPER V44 (FIXED DETECTION)...\n");
+
+// ==================== FIXED: PUMP.FUN DETECTION ====================
+
 async function findNewTokens() {
     try {
-        // Direct Method: Pump.fun Program ki accounts list se naye mints uthana
+        console.log('\n[' + new Date().toLocaleTimeString() + '] Scanning Pump.fun...');
+        
+        // METHOD 1: Query Pump.fun contracts directly via RPC
+        // Pump.fun Program ID: 6EF8rrecthR5DkZJv96tS6pg6W5tTfG9c9X6Lgnn7W6b
+        
         const response = await axios.post(HELIUS_RPC, {
-            jsonrpc: "2.0", id: 1, method: "getProgramAccounts",
+            jsonrpc: "2.0",
+            id: 1,
+            method: "getProgramAccounts",
             params: [
-                "6EF8rrecthR5DkZJv96tS6pg6W5tTfG9c9X6Lgnn7W6b",
+                "6EF8rrecthR5DkZJv96tS6pg6W5tTfG9c9X6Lgnn7W6b", // Pump.fun program
                 {
-                    filters: [{ dataSize: 217 }], // Pump.fun Mint account size
-                    encoding: "base64"
+                    filters: [
+                        {
+                            memcmp: {
+                                offset: 0,
+                                bytes: "0"  // Filter for mints
+                            }
+                        }
+                    ],
+                    encoding: "base64",
+                    commitment: "confirmed"
                 }
             ]
+        }, {
+            timeout: 15000
+        }).catch(async (err) => {
+            console.log(`   ❌ Method 1 failed: ${err.message}`);
+            // Fallback: Use Pump.fun API directly
+            return await queryPumpFunAPI();
         });
 
-        const accounts = response.data.result;
-        if (!accounts) return;
+        if (!response || !response.data) {
+            console.log('   ❌ No response from RPC');
+            return;
+        }
 
-        // Sirf aakhri 5 naye accounts check karein speed ke liye
-        const latest = accounts.slice(-5); 
+        const accounts = response.data.result;
+        
+        if (!accounts || accounts.length === 0) {
+            console.log('   ❌ No accounts found');
+            return;
+        }
+
+        console.log(`   ✅ Got ${accounts.length} accounts from Pump.fun`);
+
+        // Check last 20 accounts for new tokens (more thorough)
+        const latest = accounts.slice(Math.max(0, accounts.length - 20));
+        console.log(`   Checking last ${latest.length} for new mints...\n`);
+
+        let newFound = 0;
 
         for (let acc of latest) {
-            const mint = acc.pubkey;
-            if (!scannedMints.has(mint)) {
-                console.log(`\n🎯 NEW TOKEN DETECTED: ${mint.substring(0,10)}...`);
-                scannedMints.add(mint);
-                performForensic(mint);
+            try {
+                const mint = acc.pubkey;
+                
+                if (!scannedMints.has(mint)) {
+                    console.log(`   🎯 NEW MINT DETECTED: ${mint.substring(0, 15)}...`);
+                    scannedMints.add(mint);
+                    newFound++;
+                    
+                    // Run forensic analysis
+                    await performForensic(mint);
+                    await new Promise(r => setTimeout(r, 1000)); // Rate limit
+                }
+            } catch (e) {
+                console.log(`   ⚠️  Account error: ${e.message.split('\n')[0]}`);
             }
         }
-        if (scannedMints.size > 2000) scannedMints.clear();
+
+        console.log(`   📊 Result: ${newFound} new mints found\n`);
+
+        if (scannedMints.size > 2000) {
+            console.log('   🧹 Clearing old mint cache...');
+            scannedMints.clear();
+        }
+
     } catch (e) {
-        process.stdout.write("!"); // API Limit/Error indicator
+        console.log(`   ❌ Detection Error: ${e.message.split('\n')[0]}`);
+        process.stdout.write("!");
     }
 }
 
-// --- 2. FORENSIC ENGINE ---
+// ==================== FALLBACK: PUMP.FUN API ====================
+
+async function queryPumpFunAPI() {
+    try {
+        console.log('   Using Pump.fun API fallback...');
+        
+        const res = await axios.get('https://frontend-api.pump.fun/tokens/recent?pageSize=50', {
+            timeout: 10000,
+            headers: { 'User-Agent': 'Mozilla/5.0' }
+        });
+
+        if (res.data) {
+            console.log(`   ✅ Got ${res.data.length} tokens from Pump.fun API`);
+            return { data: { result: res.data.map((t, i) => ({
+                pubkey: t.mint,
+                account: { data: ['', 'base64'] },
+                _token: t
+            })) } };
+        }
+    } catch (e) {
+        console.log(`   ❌ Pump.fun API error: ${e.message.split('\n')[0]}`);
+    }
+    return null;
+}
+
+// ==================== FORENSIC ENGINE (UNCHANGED) ====================
+
 async function performForensic(mint) {
     try {
-        // Helius Asset API se metadata aur socials check karein
-        const assetRes = await axios.post(HELIUS_RPC, {
-            jsonrpc: "2.0", id: "my-id", method: "getAsset",
-            params: { id: mint }
-        });
-
-        const data = assetRes.data.result;
-        const info = JSON.stringify(data).toLowerCase();
-        const hasSocials = info.includes("t.me/") || info.includes("x.com/") || info.includes("twitter.com/");
-
-        // Dev Check
-        const sigs = await axios.post(HELIUS_RPC, {
-            jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [mint]
-        });
+        console.log(`   🔍 Running forensic on ${mint.substring(0, 10)}...`);
         
-        const launchSig = sigs.data.result[sigs.data.result.length - 1].signature;
+        // Step 1: Get asset metadata
+        const assetRes = await axios.post(HELIUS_RPC, {
+            jsonrpc: "2.0",
+            id: "my-id",
+            method: "getAsset",
+            params: { id: mint }
+        }, { timeout: 5000 }).catch(() => null);
+
+        let hasSocials = false;
+        if (assetRes?.data?.result) {
+            const info = JSON.stringify(assetRes.data.result).toLowerCase();
+            hasSocials = info.includes("t.me/") || info.includes("x.com/") || info.includes("twitter.com/");
+        }
+
+        // Step 2: Get dev info and transaction history
+        const sigs = await axios.post(HELIUS_RPC, {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "getSignaturesForAddress",
+            params: [mint, { limit: 1 }]
+        }, { timeout: 5000 }).catch(() => null);
+
+        if (!sigs?.data?.result || sigs.data.result.length === 0) {
+            console.log(`   ⚠️  No signatures found`);
+            return;
+        }
+
+        const launchSig = sigs.data.result[0].signature;
+        
+        // Step 3: Get transaction details
         const tx = await axios.post(HELIUS_RPC, {
-            jsonrpc: "2.0", id: 1, method: "getTransaction",
+            jsonrpc: "2.0",
+            id: 1,
+            method: "getTransaction",
             params: [launchSig, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed" }]
-        });
+        }, { timeout: 5000 }).catch(() => null);
+
+        if (!tx?.data?.result?.transaction?.message?.accountKeys) {
+            console.log(`   ⚠️  Could not parse transaction`);
+            return;
+        }
 
         const dev = tx.data.result.transaction.message.accountKeys[0].pubkey;
+        
+        // Step 4: Get dev history
         const devHistory = await axios.post(HELIUS_RPC, {
-            jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [dev, { limit: 100 }]
-        });
+            jsonrpc: "2.0",
+            id: 1,
+            method: "getSignaturesForAddress",
+            params: [dev, { limit: 100 }]
+        }, { timeout: 5000 }).catch(() => null);
+
+        if (!devHistory?.data?.result) {
+            console.log(`   ⚠️  Could not get dev history`);
+            return;
+        }
 
         const txCount = devHistory.data.result.length;
         const genesis = devHistory.data.result[devHistory.data.result.length - 1];
@@ -82,23 +195,50 @@ async function performForensic(mint) {
 
         console.log(`   📊 Stats: Age: ${ageMins.toFixed(0)}m | Txs: ${txCount} | Socials: ${hasSocials ? '✅' : '❌'}`);
 
-        // AGGRESSIVE CRITERIA: 3h+ Age YA 20+ Txs AND Socials
+        // FORENSIC CRITERIA: 3h+ Age OR 20+ Txs AND Socials
         if ((ageMins > 180 || txCount > 20) && hasSocials) {
+            console.log(`   🌟 ELITE TOKEN FOUND!\n`);
+            
             const msg = `🚀 *ELITE ALERT: PUMP.FUN MOON*\n\n` +
                         `📍 Mint: \`${mint}\`\n` +
                         `🕒 Dev Age: ${ageMins.toFixed(0)} mins\n` +
-                        `📊 Dev History: ${txCount} txs\n\n` +
-                        `🔗 [DexScreener](https://dexscreener.com/solana/${mint})`;
+                        `📊 Dev History: ${txCount} txs\n` +
+                        `🔗 Socials: ${hasSocials ? '✅ YES' : '❌ NO'}\n\n` +
+                        `🔗 [DexScreener](https://dexscreener.com/solana/${mint})\n` +
+                        `🔗 [Solscan](https://solscan.io/token/${mint})`;
             
             await bot.sendMessage(TELEGRAM_CHAT_ID, msg, { parse_mode: 'Markdown' });
-            console.log(`🌟 ALERT SENT!`);
+            console.log(`   ✉️ TELEGRAM ALERT SENT!\n`);
+        } else {
+            console.log(`   ❌ Filtered: Age ${ageMins.toFixed(0)}m < 180m OR Txs ${txCount} < 20 OR No Socials\n`);
         }
-    } catch (e) { console.log("   ⚠️ Scan Error"); }
+
+    } catch (e) {
+        console.log(`   ⚠️ Forensic Error: ${e.message.split('\n')[0]}\n`);
+    }
 }
 
-// --- START ---
-console.log("🔥 SNIPER V43 STARTING (DEEP STREAM MODE)...");
-bot.sendMessage(TELEGRAM_CHAT_ID, "✅ *System Online (V43):* Deep Stream Hunting Active!");
+// ==================== STARTUP ====================
 
-// Har 5 second baad check (Pump.fun ki speed ke liye)
-setInterval(findNewTokens, 5000);
+async function startup() {
+    try {
+        await bot.sendMessage(TELEGRAM_CHAT_ID, "✅ *V44 ONLINE:* Fixed Detection + Full Forensic");
+        console.log("✅ Bot connected to Telegram\n");
+    } catch (e) {
+        console.log("⚠️ Telegram connection issue\n");
+    }
+
+    console.log("🔍 Starting Pump.fun scan every 5 seconds...");
+    console.log("📊 Looking for: Age 3h+ OR 20+ txs AND socials\n");
+    console.log("═".repeat(60) + "\n");
+
+    // Scan every 5 seconds
+    setInterval(findNewTokens, 5000);
+}
+
+process.on('SIGINT', () => {
+    console.log('\n\n👋 Bot stopped');
+    process.exit(0);
+});
+
+startup();
