@@ -3,56 +3,34 @@ const TelegramBot = require('node-telegram-bot-api');
 const WebSocket = require('ws');
 const axios = require('axios');
 
-// --- CONFIGURATION ---
 const TELEGRAM_TOKEN = "8758743414:AAGUbb0kA9fPMfU-diX7-lVVal7cxzOTqTM";
 const TELEGRAM_CHAT_ID = "8006731872";
 const HELIUS_RPC = `https://mainnet.helius-rpc.com/?api-key=cad2ea55-0ae1-4005-8b8a-3b04167a57fb`;
 
-// Conflict-proof polling
-const bot = new TelegramBot(TELEGRAM_TOKEN, { 
-    polling: { autoStart: true, params: { timeout: 10 } } 
-});
-
+const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: { autoStart: true, params: { timeout: 10 } } });
 const alertedMints = new Set();
 const CEX_LIST = ["fixedfloat", "changenow", "binance", "okx", "bybit", "kucoin", "gate.io", "mexc", "9wz2n", "66ppj", "5vc9e", "ac56n", "asty", "36vc", "2aqp", "h8sr", "6a7s2", "47s6a", "7xvyf"];
 
-console.log('🛡️ V60 ONLINE: Professional Dev Radar Active');
+console.log('🛡️ V61 ONLINE: ELITE GEMS ONLY (Strict Mode)');
 
-// --- 🧪 Manual Test Command ---
-bot.onText(/\/test (.+)/, async (msg, match) => {
-    const testMint = match[1].trim();
-    bot.sendMessage(msg.chat.id, `🕵️‍♂️ Deep Forensic Scan: \`${testMint.substring(0,8)}...\``, {parse_mode: 'Markdown'});
-    
+async function performForensic(mint, devWallet) {
     try {
-        const sigs = await axios.post(HELIUS_RPC, {
-            jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [testMint]
-        });
-        const launchSig = sigs.data.result[sigs.data.result.length - 1].signature;
-        const tx = await axios.post(HELIUS_RPC, {
-            jsonrpc: "2.0", id: 1, method: "getTransaction",
-            params: [launchSig, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed" }]
-        });
-        const dev = tx.data.result.transaction.message.accountKeys[0].pubkey;
-        performForensic(testMint, dev, true);
-    } catch (e) {
-        bot.sendMessage(msg.chat.id, "❌ Error: Token not found.");
-    }
-});
-
-// --- 🛠️ Forensic Engine ---
-async function performForensic(mint, devWallet, isManual = false) {
-    try {
-        // 1. Metadata & Socials Check
+        // 1. Socials Check (Must be there)
         const asset = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, method: "getAsset", params: { id: mint }
         });
-        const tokenName = asset.data.result?.content?.metadata?.name || "Unknown";
         const meta = JSON.stringify(asset.data.result || "").toLowerCase();
         const hasSocials = meta.includes("t.me/") || meta.includes("x.com/") || meta.includes("twitter.com/");
+        if (!hasSocials) return; 
 
-        if (!hasSocials && !isManual) return; // Millions tokens update socials fast
+        // 2. STRICT: Dev SOL Balance Check (Min 1.2 SOL)
+        const balanceRes = await axios.post(HELIUS_RPC, {
+            jsonrpc: "2.0", id: 1, method: "getBalance", params: [devWallet]
+        });
+        const solBalance = balanceRes.data.result.value / 1e9;
+        if (solBalance < 1.2) return; // Skip poor devs
 
-        // 2. Identify Funder & Trace History
+        // 3. STRICT: Funder History (Min 25 transactions)
         const sigsRes = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [devWallet, { limit: 10 }]
         });
@@ -63,55 +41,45 @@ async function performForensic(mint, devWallet, isManual = false) {
         });
         
         const funderWallet = fundTx.data.result.transaction.message.accountKeys[0].pubkey;
-        const logs = JSON.stringify(fundTx.data.result?.meta?.logMessages || "").toLowerCase();
-
-        // Check if CEX
-        const isCEX = CEX_LIST.some(sig => funderWallet.toLowerCase().startsWith(sig) || logs.includes(sig));
-
-        // 3. Warm Wallet Rule: Funder ki history check karo
         const funderHistory = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [funderWallet, { limit: 50 }]
         });
         const txCount = funderHistory.data.result?.length || 0;
+        
+        // Skip if wallet is too fresh (Less than 25 txns)
+        if (txCount < 25) return;
 
-        // DECISION LOGIC
-        // Alert if: (CEX Verified) OR (History > 10 transactions AND has Socials)
-        if (isCEX || (txCount >= 10 && hasSocials)) {
-            const devType = isCEX ? "🏛️ ELITE CEX" : "💎 PRO DEV (Warm Wallet)";
-            const msg = `🌟 *${devType} SIGNAL*\n\n` +
-                        `🏷️ **Name:** \`${tokenName}\`\n` +
-                        `📍 **Mint:** \`${mint}\`\n` +
-                        `📈 **Funder History:** ${txCount} txns\n\n` +
-                        `🔗 [Jupiter Swap](https://jup.ag/swap/SOL-${mint})\n` +
-                        `📊 [DexScreener](https://dexscreener.com/solana/${mint})`;
+        // 4. CEX Check (Priority)
+        const logs = JSON.stringify(fundTx.data.result?.meta?.logMessages || "").toLowerCase();
+        const isCEX = CEX_LIST.some(sig => funderWallet.toLowerCase().startsWith(sig) || logs.includes(sig));
 
-            await bot.sendMessage(TELEGRAM_CHAT_ID, msg, { parse_mode: 'Markdown', disable_web_page_preview: true });
-            console.log(`✅ Alert: ${tokenName} | History: ${txCount}`);
-        } else if (isManual) {
-            bot.sendMessage(TELEGRAM_CHAT_ID, `❌ *SCAN FAILED*\nSocials: ${hasSocials ? "✅" : "❌"}\nHistory: ${txCount} txns (Need 10+)\nCEX: ${isCEX ? "✅" : "❌"}`);
-        }
-    } catch (e) {
-        if (!isManual) alertedMints.delete(mint);
-    }
+        // FINAL DECISION
+        const tokenName = asset.data.result?.content?.metadata?.name || "Unknown";
+        const msg = `💎 *ELITE GEM DETECTED (V61)*\n\n` +
+                    `🏷️ **Name:** \`${tokenName}\`\n` +
+                    `💰 **Dev Budget:** ${solBalance.toFixed(2)} SOL\n` +
+                    `📈 **Wallet Trust:** ${txCount} txns\n` +
+                    `🏦 **CEX Verified:** ${isCEX ? "✅ Yes" : "❌ No"}\n\n` +
+                    `🔗 [Jupiter](https://jup.ag/swap/SOL-${mint})\n` +
+                    `📊 [DexScreener](https://dexscreener.com/solana/${mint})`;
+
+        await bot.sendMessage(TELEGRAM_CHAT_ID, msg, { parse_mode: 'Markdown', disable_web_page_preview: true });
+
+    } catch (e) { }
 }
 
-// --- 📡 Radar Management ---
 function startRadar() {
     const ws = new WebSocket('wss://pumpportal.fun/api/data');
-    ws.on('open', () => {
-        console.log('📡 Radar Connected...');
-        ws.send(JSON.stringify({ "method": "subscribeNewToken" }));
-    });
+    ws.on('open', () => ws.send(JSON.stringify({ "method": "subscribeNewToken" })));
     ws.on('message', async (data) => {
         const event = JSON.parse(data.toString());
         if (event.mint && !alertedMints.has(event.mint)) {
             alertedMints.add(event.mint);
-            // 45 Seconds wait taake professional dev metadata/socials update kar le
-            setTimeout(() => performForensic(event.mint, event.traderPublicKey), 45000);
+            // 50 Seconds wait for metadata update
+            setTimeout(() => performForensic(event.mint, event.traderPublicKey), 50000);
         }
     });
     ws.on('close', () => setTimeout(startRadar, 3000));
 }
 
 startRadar();
-setInterval(() => alertedMints.clear(), 12 * 60 * 60 * 1000);
