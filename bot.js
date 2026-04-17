@@ -12,7 +12,7 @@ const CEX_SIGNATURES = ["9Wz2n", "66pPj", "5VC9e", "AC56n", "ASTy", "36vC", "2AQ
 // ==========================================
 // 🧪 TEST AREA: Apna Mint Address Yahan Dalein
 // ==========================================
-const TEST_MINT = "6p6xgHyF7AeE6TZkSmFsko444wqoP15icUSqi2jfGiPN"; 
+const TEST_MINT = "ACtfUWtgvaXrQGNMiohTusi5jcx5RJf5zwu9aAxkpump"; 
 // ==========================================
 
 async function runTest(mint) {
