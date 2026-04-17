@@ -7,16 +7,24 @@ const TELEGRAM_TOKEN = "8758743414:AAGUbb0kA9fPMfU-diX7-lVVal7cxzOTqTM";
 const TELEGRAM_CHAT_ID = "8006731872";
 const HELIUS_RPC = `https://mainnet.helius-rpc.com/?api-key=cad2ea55-0ae1-4005-8b8a-3b04167a57fb`;
 
-// Polling true ki hai taake /test command bhi chale
-const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
+// --- FIX: Added specific polling params to stop 409 Conflict ---
+const bot = new TelegramBot(TELEGRAM_TOKEN, { 
+    polling: {
+        autoStart: true,
+        params: { timeout: 10 }
+    } 
+});
+
 const alertedMints = new Set();
 
 // Updated Hype & CEX List
 const CEX_LIST = ["fixedfloat", "changenow", "binance", "okx", "bybit", "kucoin", "gate.io", "mexc", "9wz2n", "66ppj", "5vc9e", "ac56n", "asty", "36vc", "2aqp", "h8sr", "6a7s2", "47s6a", "7xvyf"];
 
+console.log('🛡️ V58 ONLINE: Conflict-Proof Radar Active');
+
 // --- 🧪 Manual Test Command ---
 bot.onText(/\/test (.+)/, async (msg, match) => {
-    const testMint = match[1];
+    const testMint = match[1].trim();
     bot.sendMessage(msg.chat.id, `🕵️‍♂️ Deep Scanning: \`${testMint.substring(0,8)}...\``, {parse_mode: 'Markdown'});
     
     try {
@@ -31,11 +39,11 @@ bot.onText(/\/test (.+)/, async (msg, match) => {
         const dev = tx.data.result.transaction.message.accountKeys[0].pubkey;
         performForensic(testMint, dev, true);
     } catch (e) {
-        bot.sendMessage(msg.chat.id, "❌ Forensic Error: Invalid Mint or RPC issue.");
+        bot.sendMessage(msg.chat.id, "❌ Forensic Error: Address not found on Solana.");
     }
 });
 
-// --- 🛠️ Forensic Engine (3-Level Deep Scan) ---
+// --- 🛠️ Forensic Engine (3-Level Deep Trace) ---
 async function performForensic(mint, devWallet, isManual = false) {
     try {
         // 1. Fetch Metadata (Name & Socials)
@@ -46,9 +54,9 @@ async function performForensic(mint, devWallet, isManual = false) {
         const meta = JSON.stringify(asset.data.result || "").toLowerCase();
         const hasSocials = meta.includes("t.me/") || meta.includes("x.com/") || meta.includes("twitter.com/");
 
-        if (!hasSocials && !isManual) return; // Automatic skip if no socials
+        if (!hasSocials && !isManual) return; 
 
-        // 2. Recursive CEX Check (Up to 3 levels)
+        // 2. Recursive CEX Check (3 levels deep)
         let currentWallet = devWallet;
         let verifiedSource = null;
 
@@ -68,19 +76,18 @@ async function performForensic(mint, devWallet, isManual = false) {
             const logs = JSON.stringify(fundTx.data.result?.meta?.logMessages || "").toLowerCase();
             const funder = fundTx.data.result?.transaction?.message?.accountKeys[0]?.pubkey || "";
             
-            // Check if Funder or Logs match CEX List
             const foundCEX = CEX_LIST.find(sig => funder.toLowerCase().startsWith(sig) || logs.includes(sig));
 
             if (foundCEX) {
                 verifiedSource = foundCEX.toUpperCase();
                 break;
             }
-            currentWallet = funder; // Trace 1 level deeper
+            currentWallet = funder; 
         }
 
-        // 3. Send Alert
+        // 3. Professional Alert Format
         if (verifiedSource) {
-            const msg = `🌟 *ELITE CEX SIGNAL (V57)*\n\n` +
+            const msg = `🌟 *ELITE CEX SIGNAL (V58)*\n\n` +
                         `🏷️ **Name:** \`${tokenName}\`\n` +
                         `📍 **Mint:** \`${mint}\`\n` +
                         `💰 **Source:** *${verifiedSource} Verified* ✅\n\n` +
@@ -88,20 +95,18 @@ async function performForensic(mint, devWallet, isManual = false) {
                         `📊 [DexScreener](https://dexscreener.com/solana/${mint})`;
 
             await bot.sendMessage(TELEGRAM_CHAT_ID, msg, { parse_mode: 'Markdown', disable_web_page_preview: true });
-            console.log(`✅ Alert Sent: ${tokenName}`);
         } else if (isManual) {
-            bot.sendMessage(TELEGRAM_CHAT_ID, `❌ *TEST FAILED*\nSocials: ${hasSocials ? "✅" : "❌"}\nCEX: ❌ (No verified source in 3 levels)`);
+            bot.sendMessage(TELEGRAM_CHAT_ID, `❌ *TEST FAILED*\nSocials: ${hasSocials ? "✅" : "❌"}\nCEX: ❌ (No CEX found in 3 levels)`);
         }
     } catch (e) {
         if (!isManual) alertedMints.delete(mint);
     }
 }
 
-// --- 📡 Radar Start ---
+// --- 📡 Radar Management ---
 function startRadar() {
     const ws = new WebSocket('wss://pumpportal.fun/api/data');
     ws.on('open', () => {
-        console.log('🛡️ V57 ONLINE: Multi-Level CEX Radar Active');
         ws.send(JSON.stringify({ "method": "subscribeNewToken" }));
     });
     ws.on('message', async (data) => {
@@ -116,3 +121,10 @@ function startRadar() {
 
 startRadar();
 setInterval(() => alertedMints.clear(), 12 * 60 * 60 * 1000);
+
+// Error Handling for Bot
+bot.on('polling_error', (error) => {
+    if (error.code !== 'ETELEGRAM' || !error.message.includes('409 Conflict')) {
+        console.error('Bot Error:', error);
+    }
+});
