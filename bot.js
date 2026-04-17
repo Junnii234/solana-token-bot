@@ -2,135 +2,103 @@ require('dotenv').config();
 const axios = require('axios');
 const TelegramBot = require('node-telegram-bot-api');
 
-// --- 1. HARDCODED CREDENTIALS ---
 const TELEGRAM_TOKEN = "8758743414:AAGUbb0kA9fPMfU-diX7-lVVal7cxzOTqTM";
 const TELEGRAM_CHAT_ID = "8006731872";
 const HELIUS_API_KEY = "cad2ea55-0ae1-4005-8b8a-3b04167a57fb";
-
 const HELIUS_RPC = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`;
+
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
-
-const SAFE_FUNDS = [
-    "9Wz2n", "66pPj", "5VC9e", "AC56n", "ASTy", "36vC", "2AQp", "H8sR", "6V9p",
-    "FixedFloat", "ChangeNOW", "SideShift", "Binance", "Bybit", "OKX", "Bitget"
-];
-
-let scannedSignatures = new Set();
 let scannedMints = new Set();
 
-// --- 2. FORENSIC ENGINE ---
-async function scanToken(mint) {
-    if (scannedMints.has(mint)) return;
-    scannedMints.add(mint);
-    if (scannedMints.size > 1000) scannedMints.clear();
+const SAFE_FUNDS = ["9Wz2n", "66pPj", "5VC9e", "FixedFloat", "ChangeNOW", "SideShift", "Binance", "Bybit", "OKX"];
 
+// --- 1. CORE DETECTION (RE-BUILT) ---
+async function findNewTokens() {
     try {
-        console.log(`\n🔬 LAB TESTING MINT: ${mint.substring(0, 8)}...`);
-        
-        const sigsRes = await axios.post(HELIUS_RPC, {
+        // Direct Method: Pump.fun Program ki accounts list se naye mints uthana
+        const response = await axios.post(HELIUS_RPC, {
+            jsonrpc: "2.0", id: 1, method: "getProgramAccounts",
+            params: [
+                "6EF8rrecthR5DkZJv96tS6pg6W5tTfG9c9X6Lgnn7W6b",
+                {
+                    filters: [{ dataSize: 217 }], // Pump.fun Mint account size
+                    encoding: "base64"
+                }
+            ]
+        });
+
+        const accounts = response.data.result;
+        if (!accounts) return;
+
+        // Sirf aakhri 5 naye accounts check karein speed ke liye
+        const latest = accounts.slice(-5); 
+
+        for (let acc of latest) {
+            const mint = acc.pubkey;
+            if (!scannedMints.has(mint)) {
+                console.log(`\n🎯 NEW TOKEN DETECTED: ${mint.substring(0,10)}...`);
+                scannedMints.add(mint);
+                performForensic(mint);
+            }
+        }
+        if (scannedMints.size > 2000) scannedMints.clear();
+    } catch (e) {
+        process.stdout.write("!"); // API Limit/Error indicator
+    }
+}
+
+// --- 2. FORENSIC ENGINE ---
+async function performForensic(mint) {
+    try {
+        // Helius Asset API se metadata aur socials check karein
+        const assetRes = await axios.post(HELIUS_RPC, {
+            jsonrpc: "2.0", id: "my-id", method: "getAsset",
+            params: { id: mint }
+        });
+
+        const data = assetRes.data.result;
+        const info = JSON.stringify(data).toLowerCase();
+        const hasSocials = info.includes("t.me/") || info.includes("x.com/") || info.includes("twitter.com/");
+
+        // Dev Check
+        const sigs = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [mint]
         });
-        if (!sigsRes.data.result || sigsRes.data.result.length === 0) {
-            console.log(`   ❌ No history found.`);
-            return;
-        }
-
-        const launchSig = sigsRes.data.result[sigsRes.data.result.length - 1].signature;
+        
+        const launchSig = sigs.data.result[sigs.data.result.length - 1].signature;
         const tx = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, method: "getTransaction",
             params: [launchSig, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed" }]
         });
-        
+
         const dev = tx.data.result.transaction.message.accountKeys[0].pubkey;
-        const walletSigs = await axios.post(HELIUS_RPC, {
-            jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [dev, { limit: 1000 }]
+        const devHistory = await axios.post(HELIUS_RPC, {
+            jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [dev, { limit: 100 }]
         });
-        
-        const genesis = walletSigs.data.result[walletSigs.data.result.length - 1];
+
+        const txCount = devHistory.data.result.length;
+        const genesis = devHistory.data.result[devHistory.data.result.length - 1];
         const ageMins = (Date.now() / 1000 - genesis.blockTime) / 60;
-        const txCount = walletSigs.data.result.length;
 
-        const fundTx = await axios.post(HELIUS_RPC, {
-            jsonrpc: "2.0", id: 1, method: "getTransaction",
-            params: [genesis.signature, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed" }]
-        });
-        
-        const funder = fundTx.data.result.transaction.message.accountKeys[0].pubkey;
-        const logs = JSON.stringify(fundTx.data.result.meta.logMessages || "").toLowerCase();
-        const isSafeFund = SAFE_FUNDS.some(sig => funder.startsWith(sig) || logs.includes(sig.toLowerCase()));
+        console.log(`   📊 Stats: Age: ${ageMins.toFixed(0)}m | Txs: ${txCount} | Socials: ${hasSocials ? '✅' : '❌'}`);
 
-        console.log(`   ├─ Dev Age: ${ageMins.toFixed(0)}m | Txs: ${txCount}`);
-        console.log(`   ├─ Funding: ${isSafeFund ? 'SAFE ✅' : 'Risky ⚠️'} (${funder.substring(0,6)})`);
-
-        if ((ageMins > 180 || txCount > 20) && isSafeFund) {
-            const asset = await axios.post(HELIUS_RPC, {
-                jsonrpc: "2.0", id: 1, method: "getAsset", params: { id: mint }
-            });
-            const data = JSON.stringify(asset.data.result).toLowerCase();
-            const hasSocials = data.includes("t.me/") || data.includes("twitter.com/") || data.includes("x.com/");
-
-            if (hasSocials) {
-                const msg = `🚀 *AGGRESSIVE ALERT: POTENTIAL MOON*\n\n` +
-                            `📍 Mint: \`${mint}\`\n` +
-                            `💰 Fund: ${isSafeFund ? '✅ Safe/Bridge' : '⏳ Private'}\n` +
-                            `🕒 Age: ${ageMins.toFixed(0)} mins\n` +
-                            `📊 History: ${txCount} transactions\n\n` +
-                            `🔗 [DexScreener](https://dexscreener.com/solana/${mint})`;
-                
-                await bot.sendMessage(TELEGRAM_CHAT_ID, msg, { parse_mode: 'Markdown' });
-                console.log(`   🌟 ALERT SENT TO TELEGRAM!`);
-            } else {
-                console.log(`   ❌ Rejected: No Socials`);
-            }
-        } else {
-            console.log(`   ❌ Rejected: Failed Elite Criteria`);
+        // AGGRESSIVE CRITERIA: 3h+ Age YA 20+ Txs AND Socials
+        if ((ageMins > 180 || txCount > 20) && hasSocials) {
+            const msg = `🚀 *ELITE ALERT: PUMP.FUN MOON*\n\n` +
+                        `📍 Mint: \`${mint}\`\n` +
+                        `🕒 Dev Age: ${ageMins.toFixed(0)} mins\n` +
+                        `📊 Dev History: ${txCount} txs\n\n` +
+                        `🔗 [DexScreener](https://dexscreener.com/solana/${mint})`;
+            
+            await bot.sendMessage(TELEGRAM_CHAT_ID, msg, { parse_mode: 'Markdown' });
+            console.log(`🌟 ALERT SENT!`);
         }
-    } catch (e) { 
-        console.log(`   ⚠️ Scan Error: ${e.message}`); 
-    }
+    } catch (e) { console.log("   ⚠️ Scan Error"); }
 }
 
-// --- 3. LIVE RADAR EXTRACTION ---
-async function fetchLatestTokens() {
-    try {
-        process.stdout.write("."); // Radar blip
-        const response = await axios.post(HELIUS_RPC, {
-            jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress",
-            params: ["6EF8rrecthR5DkZJv96tS6pg6W5tTfG9c9X6Lgnn7W6b", { limit: 10 }] // Badha kar 10 kar diya
-        });
+// --- START ---
+console.log("🔥 SNIPER V43 STARTING (DEEP STREAM MODE)...");
+bot.sendMessage(TELEGRAM_CHAT_ID, "✅ *System Online (V43):* Deep Stream Hunting Active!");
 
-        const transactions = response.data.result;
-        for (let tx of transactions) {
-            if (scannedSignatures.has(tx.signature)) continue;
-            scannedSignatures.add(tx.signature);
-
-            if (scannedSignatures.size > 2000) scannedSignatures.clear();
-
-            const txDetail = await axios.post(HELIUS_RPC, {
-                jsonrpc: "2.0", id: 1, method: "getTransaction",
-                params: [tx.signature, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed" }]
-            });
-
-            if (txDetail.data?.result?.meta?.postTokenBalances?.length > 0) {
-                const mint = txDetail.data.result.meta.postTokenBalances[0].mint;
-                // Agar SOL nahi hai, to matlab naya token detect hua hai
-                if (mint !== "So11111111111111111111111111111111111111112") { 
-                    console.log(`\n🎯 TOKEN SPOTTED IN TX: ${tx.signature.substring(0,10)}...`);
-                    scanToken(mint); 
-                }
-            }
-        }
-    } catch (e) { 
-        console.log(`\n📡 API Radar Error: ${e.message}`); 
-    }
-}
-
-// --- START ENGINE ---
-console.log("🔥 AGGRESSIVE SNIPER V42 (LIVE RADAR) STARTING...");
-
-bot.sendMessage(TELEGRAM_CHAT_ID, "✅ *System Online (V42):* Live Radar Active!\n\nYou will now see scanning logs on the server.")
-   .then(() => console.log("🔔 Startup Alert Sent! Radar spinning..."))
-   .catch((err) => console.log("❌ Startup Failed."));
-
-// Radar sweep every 10 seconds
-setInterval(fetchLatestTokens, 10000); 
+// Har 5 second baad check (Pump.fun ki speed ke liye)
+setInterval(findNewTokens, 5000);
