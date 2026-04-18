@@ -24,18 +24,18 @@ async function fullAudit(mint) {
         const asset = res.data.result;
         if (!asset) return null;
 
-        // Metadata Audit (Crucial: Mutable MUST be false)
         const isImmutable = asset.mutable === false;
-        const noFreeze = !asset.authorities?.some(a => a.scopes?.includes('freeze'));
+        // Check both authorities and metadata for freeze power
+        const noFreeze = !asset.authorities?.some(a => a.scopes?.includes('freeze')) && 
+                         asset.token_info?.freeze_authority === null;
         
-        // Holder Audit
         const holders = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, method: "getTokenLargestAccounts", params: [mint]
         }, { headers: HEADERS, timeout: 5000 });
 
-        const top1 = (holders.data.result?.value?.[0]?.amount || 0);
-        const supply = asset.token_info?.supply || 1000000000 * 1e6;
-        const isCleanDist = (top1 / supply) < 0.15; // 15% Cap
+        const top1 = parseFloat(holders.data.result?.value?.[0]?.amount || 0);
+        const supply = parseFloat(asset.token_info?.supply || 1);
+        const isCleanDist = (top1 / supply) < 0.15;
 
         return { 
             safe: isImmutable && noFreeze && isCleanDist, 
@@ -48,9 +48,8 @@ async function fullAudit(mint) {
 
 async function devAudit(address) {
     try {
-        if (!address) return { score: 0, age: 0, sol: 0, txs: 0 };
+        if (!address) return { score: 0, age: "Unknown", sol: "0.00", txCount: 0 };
 
-        // Fetching more transactions to find the true first one
         const [bal, txs] = await Promise.all([
             axios.post(HELIUS_RPC, { jsonrpc: "2.0", id: 1, method: "getBalance", params: [address] }),
             axios.post(HELIUS_RPC, { jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [address, { limit: 100 }] })
@@ -58,49 +57,47 @@ async function devAudit(address) {
 
         const sol = (bal.data.result?.value || 0) / 1e9;
         const history = txs.data.result || [];
+        const count = history.length;
         
-        let ageDays = 0;
-        if (history.length > 1) {
-            const newest = history[0].blockTime;
-            const oldest = history[history.length - 1].blockTime;
-            ageDays = (newest - oldest) / 86400; // Time in days
-            
-            // If Helius only gives recent txs, we check if the wallet is fundamentally "old"
-            // through a second check or simply by increasing the limit.
-        }
-
-        // --- SCORING SYSTEM (Based on your Warm Wallet Table) ---
+        let ageStr = "Fresh";
         let score = 0;
-        if (ageDays >= 30) score += 40; 
-        else if (ageDays >= 7) score += 20;
 
-        if (sol >= 1.5) score += 30; 
-        else if (sol >= 0.5) score += 15;
-
-        if (history.length >= 50) score += 30; 
-        else if (history.length >= 10) score += 15;
+        if (count > 1) {
+            const newest = history[0].blockTime;
+            const oldest = history[count - 1].blockTime;
+            const ageDays = (newest - oldest) / 86400;
+            
+            ageStr = ageDays < 0.1 ? "Active Now" : `${ageDays.toFixed(1)} Days`;
+            
+            // Re-calibrated Scoring
+            if (ageDays >= 30) score += 40; else if (ageDays >= 7) score += 20;
+            if (sol >= 1.0) score += 30; else if (sol >= 0.2) score += 15;
+            if (count >= 50) score += 30; else if (count >= 10) score += 15;
+        }
 
         return { 
             score, 
-            age: ageDays < 0.1 ? "New/Active" : `${ageDays.toFixed(1)} Days`, 
+            age: ageStr, 
             sol: sol.toFixed(2), 
-            txCount: history.length 
+            txCount: count 
         };
-    } catch (e) { return { score: 0, age: 0, sol: 0, txs: 0 }; }
+    } catch (e) { 
+        return { score: 0, age: "Error", sol: "0.00", txCount: 0 }; 
+    }
 }
 
-// ==================== COMMANDS & RADAR ====================
+// ==================== COMMANDS ====================
 
 bot.onText(/\/test (.+)/, async (msg, match) => {
     const testMint = match[1].trim();
-    bot.sendMessage(msg.chat.id, `🧬 Analyzing Forensics for: \`${testMint}\`...`, { parse_mode: 'Markdown' });
+    bot.sendMessage(msg.chat.id, `🧬 **V11.6 Forensic Analysis:** \`${testMint}\``, { parse_mode: 'Markdown' });
 
     const audit = await fullAudit(testMint);
-    if (!audit) return bot.sendMessage(msg.chat.id, "❌ RPC Error: Verify Address.");
+    if (!audit) return bot.sendMessage(msg.chat.id, "❌ RPC Error: Data not found.");
 
     const dev = await devAudit(audit.creator);
 
-    const report = `📊 **AUDIT RESULTS V11.5**\n\n` +
+    const report = `📊 **AUDIT RESULTS V11.6**\n\n` +
                    `🏷️ **Token:** ${audit.name}\n` +
                    `🛡️ **Security Check:**\n` +
                    `- Immutable (No Rug): ${audit.isImmutable ? '✅' : '❌'}\n` +
@@ -111,15 +108,17 @@ bot.onText(/\/test (.+)/, async (msg, match) => {
                    `- Wallet Age: ${dev.age}\n` +
                    `- Current Balance: ${dev.sol} SOL\n` +
                    `- Total Activity: ${dev.txCount} Txs\n\n` +
-                   `🏁 **Status:** ${audit.safe && dev.score >= 30 ? "PASSED ✅" : "FAILED ❌"}`;
+                   `🏁 **Status:** ${audit.safe && dev.score >= 35 ? "PASSED ✅" : "FAILED ❌"}`;
 
     bot.sendMessage(msg.chat.id, report);
 });
 
+// ==================== RADAR ====================
+
 function startRadar() {
     const ws = new WebSocket('wss://pumpportal.fun/api/data');
     ws.on('open', () => {
-        log('📡 V11.5 FIXED RADAR ONLINE');
+        log('📡 V11.6 RADAR STARTING...');
         ws.send(JSON.stringify({ "method": "subscribeTokenTrade" }));
     });
     ws.on('message', async (data) => {
@@ -131,8 +130,7 @@ function startRadar() {
                 alertedMints.add(event.mint);
                 const [audit, dev] = await Promise.all([fullAudit(event.mint), devAudit(event.traderPublicKey || event.user)]);
                 if (audit && audit.safe && dev.score >= 35) {
-                    const msg = `🚀 **GEM DETECTED**\n\n${audit.name}\nMC: ${mc.toFixed(1)} SOL\nDev Score: ${dev.score}\n\n[DexScreener](https://dexscreener.com/solana/${event.mint})`;
-                    bot.sendMessage(TELEGRAM_CHAT_ID, msg, { parse_mode: 'Markdown' });
+                    bot.sendMessage(TELEGRAM_CHAT_ID, `🚀 **GEM DETECTED (V11.6)**\n\n${audit.name}\nMC: ${mc.toFixed(1)} SOL\nScore: ${dev.score}/100\n\n[DexScreener](https://dexscreener.com/solana/${event.mint})`, { parse_mode: 'Markdown' });
                 }
             }
         } catch (e) {}
