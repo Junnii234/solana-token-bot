@@ -14,8 +14,8 @@ const HEADERS = { 'Content-Type': 'application/json' };
 
 const log = (msg) => console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
 
-log('💎 ELITE SCANNER v5.5 - GRADUATES ONLY');
-log('🌐 Socials Logic: Website OR X OR TG = PASS\n');
+log('💎 ELITE SCANNER v5.6 - FAST GRADUATE MODE');
+log('🌐 Limit: 60 SOL | Socials: Any 1 (Web/X/TG) | Metadata: Active\n');
 
 // ==================== 1. WARM WALLET CHECK ====================
 
@@ -34,13 +34,11 @@ async function validateWarmWallet(creator) {
     } catch (e) { return { warm: false }; }
 }
 
-// ==================== 2. ADVANCED METADATA (ANY 1 SOCIAL) ====================
+// ==================== 2. METADATA & SOCIALS (ANY 1) ====================
 
 async function checkMetadataSocials(mint, name, symbol) {
     try {
         log(`📝 Step 2/5: SOCIALS & RED FLAGS CHECK...`);
-        
-        // Red Flag Words Check
         const redFlags = ["scam", "test", "fake", "rug", "moon", "dev", "pump"];
         const text = `${name} ${symbol}`.toLowerCase();
         if (redFlags.some(flag => text.includes(flag))) return { safe: false, reason: "Red flag name" };
@@ -53,17 +51,14 @@ async function checkMetadataSocials(mint, name, symbol) {
         const metadata = (asset?.content?.metadata_description || "").toLowerCase();
         const links = asset?.content?.links || {};
 
-        // Socials Check Logic (Any one of the three)
         const hasX = !!links.twitter || metadata.includes("x.com") || metadata.includes("t.co");
         const hasTG = !!links.telegram || metadata.includes("t.me");
         const hasWeb = !!links.website || metadata.includes("http") || metadata.includes(".io") || metadata.includes(".com");
 
         if (hasX || hasTG || hasWeb) {
-            log(`   ✅ Socials Found: [Web: ${hasWeb}, X: ${hasX}, TG: ${hasTG}]`);
             return { safe: true, socials: { x: hasX, tg: hasTG, web: hasWeb } };
         }
-
-        return { safe: false, reason: "No Social Links found" };
+        return { safe: false, reason: "No Social Links" };
     } catch (e) { return { safe: false, reason: "Metadata error" }; }
 }
 
@@ -74,15 +69,12 @@ async function checkAuthorities(mint) {
         log(`🛡️ Step 3/5: AUTHORITY CHECK...`);
         const res = await axios.post(HELIUS_RPC, { jsonrpc: "2.0", id: 1, method: "getAsset", params: { id: mint } }, { headers: HEADERS });
         const asset = res.data.result;
-        
-        if (asset.mutable === true) return { safe: false, reason: "Mint Active" };
-        if (asset.ownership?.frozen === false) return { safe: false, reason: "Freeze Active" };
-        
+        if (asset.mutable === true || asset.ownership?.frozen === false) return { safe: false, reason: "Authorities Active" };
         return { safe: true };
     } catch (e) { return { safe: false }; }
 }
 
-// ==================== 4. HOLDER CHECK (RETRY LOGIC) ====================
+// ==================== 4. HOLDER CHECK ====================
 
 async function checkHolderDistribution(mint, retries = 3) {
     for (let i = 0; i < retries; i++) {
@@ -99,25 +91,21 @@ async function checkHolderDistribution(mint, retries = 3) {
     }
 }
 
-// ==================== MAIN ANALYSIS ENGINE ====================
+// ==================== MAIN ANALYSIS ====================
 
 async function analyzeToken(mint, creator, name, symbol) {
     try {
-        log(`\n🔍 Analyzing Candidate: ${name}`);
-        
+        log(`🔍 Starting Analysis for: ${name}`);
         const meta = await checkMetadataSocials(mint, name, symbol);
         if (!meta.safe) { log(`   ❌ REJECT: ${meta.reason}`); return null; }
-
         const warm = await validateWarmWallet(creator);
         if (!warm.warm) { log(`   ❌ REJECT: Dev too young`); return null; }
-
         const auth = await checkAuthorities(mint);
-        if (!auth.safe) { log(`   ❌ REJECT: Authorities not revoked`); return null; }
-
+        if (!auth.safe) { log(`   ❌ REJECT: Authorities Active`); return null; }
         const holders = await checkHolderDistribution(mint);
         if (!holders.safe) { log(`   ❌ REJECT: Whale alert`); return null; }
 
-        return { age: warm.age, top1: holders.top1, socials: meta.socials };
+        return { age: warm.age, top1: holders.top1 };
     } catch (e) { return null; }
 }
 
@@ -125,26 +113,30 @@ async function analyzeToken(mint, creator, name, symbol) {
 
 function startRadar() {
     const ws = new WebSocket('wss://pumpportal.fun/api/data');
-    
     ws.on('open', () => {
-        log('📡 WebSocket Connected - High Safety Graduate Mode');
+        log('📡 WebSocket Connected - Fast Graduate Mode (60+ SOL)');
         ws.send(JSON.stringify({ "method": "subscribeTokenTrade" })); 
     });
 
     ws.on('message', async (data) => {
         try {
             const event = JSON.parse(data.toString());
-            if (!event.mint || alertedMints.has(event.mint)) return;
+            if (!event.mint) return;
 
-            // Target ONLY Graduates (80-100 SOL)
-            if (event.marketCapSol >= 80 && event.marketCapSol <= 100) {
+            // 🟢 LIVE TRAFFIC LOG (Ab screen khali nahi rahegi)
+            if (event.marketCapSol) {
+                const mcap = event.marketCapSol.toFixed(1);
+                if (mcap % 5 === 0) log(`🔹 Live Traffic: ${event.name || '???'} | ${mcap} SOL`);
+            }
+
+            if (event.marketCapSol >= 60 && !alertedMints.has(event.mint)) {
                 alertedMints.add(event.mint);
-                log(`🎯 GRADUATE DETECTED: ${event.name}`);
+                log(`🎯 TARGET REACHED 60 SOL: ${event.name}`);
 
                 setTimeout(async () => {
                     const result = await analyzeToken(event.mint, event.traderPublicKey, event.name, event.symbol);
                     if (result) {
-                        const report = `🎓 **ELITE GRADUATED TOKEN** 🛡️\n\n` +
+                        const report = `🎓 **ELITE GRADUATE (60+ SOL)** 🛡️\n\n` +
                                        `🏷️ **Name:** ${event.name}\n` +
                                        `👴 **Dev Age:** ${result.age} days\n` +
                                        `👥 **Top Whale:** ${result.top1.toFixed(1)}%\n\n` +
@@ -152,11 +144,10 @@ function startRadar() {
                         await bot.sendMessage(TELEGRAM_CHAT_ID, report, { parse_mode: 'Markdown' });
                         log(`🚀 ALERT SENT: ${event.name}`);
                     }
-                }, 15000); 
+                }, 10000); 
             }
         } catch (e) {}
     });
-
     ws.on('close', () => setTimeout(startRadar, 3000));
 }
 
