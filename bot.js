@@ -1,6 +1,5 @@
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
-const WebSocket = require('ws');
 const axios = require('axios');
 
 // ==================== CONFIG ====================
@@ -14,22 +13,22 @@ const HEADERS = { 'Content-Type': 'application/json' };
 
 const log = (msg) => console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
 const error = (msg) => console.error(`[${new Date().toLocaleTimeString()}] ❌ ${msg}`);
-const reject = (reason) => console.log(`[${new Date().toLocaleTimeString()}] ⚠️  REJECTED: ${reason}`);
+const reject = (reason) => console.log(`[${new Date().toLocaleTimeString()}] ⚠️  REJECT: ${reason}`);
 
-log('🚀 V10.0 PUMP.FUN NEW TOKEN DETECTOR');
-log('🔥 Warm Wallet Detection Only');
-log('💰 Direct Solana Blockchain Monitoring\n');
+log('🚀 V11.0 - PUMP.FUN API DIRECT');
+log('🔥 Real Dev Detection (90+d, 2+mo, 2+SOL)');
+log('💰 Direct API Monitoring\n');
 
-// ==================== WARM WALLET DETECTION ONLY ====================
+// ==================== WARM WALLET DETECTION ====================
 
 async function checkWarmWallet(creator) {
     try {
-        log(`   🔍 Checking warm wallet: ${creator.slice(0, 10)}...`);
+        log(`   🔍 Warm wallet: ${creator.slice(0, 10)}...`);
         
         const res = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, 
             method: "getSignaturesForAddress", 
-            params: [creator, { limit: 200 }]
+            params: [creator, { limit: 300 }]
         }, { headers: HEADERS, timeout: 5000 });
 
         const txs = res.data.result || [];
@@ -37,102 +36,106 @@ async function checkWarmWallet(creator) {
         // Check 1: Has transaction history
         if (txs.length === 0) {
             reject(`No transaction history`);
-            return { warm: false, reason: "No tx history" };
+            return { warm: false };
         }
 
-        // Check 2: Wallet age
+        // Check 2: Age >= 90 days
         const oldestTx = txs[txs.length - 1];
         const newestTx = txs[0];
         const walletAgeMs = (newestTx.blockTime - oldestTx.blockTime) * 1000;
         const walletAgeDays = walletAgeMs / (1000 * 60 * 60 * 24);
 
-        if (walletAgeDays < 5) {
-            reject(`Wallet too young: ${walletAgeDays.toFixed(1)} days`);
-            return { warm: false, reason: "Too young" };
+        if (walletAgeDays < 90) {
+            reject(`Age: ${walletAgeDays.toFixed(1)}d (need 90+)`);
+            return { warm: false };
         }
 
-        // Check 3: Dormant then active (recycled scammer wallet)
-        const txsLast7Days = txs.filter(tx => {
-            const daysSinceTx = (Date.now() / 1000 - tx.blockTime) / (60 * 60 * 24);
-            return daysSinceTx < 7;
-        });
-
-        const dormancyGap = txs.length - txsLast7Days.length;
-        const recentActivityBurst = txsLast7Days.length > 5;
-
-        if (dormancyGap > 30 && recentActivityBurst) {
-            reject(`Dormant wallet suddenly active (recycled scammer)`);
-            return { warm: false, reason: "Recycled wallet" };
-        }
-
-        // Check 4: Activity distribution
-        const txsByDay = {};
+        // Check 3: Activity >= 2 months
+        const txsByMonth = {};
         txs.forEach(tx => {
-            const day = Math.floor((Date.now() / 1000 - tx.blockTime) / (60 * 60 * 24));
-            txsByDay[day] = (txsByDay[day] || 0) + 1;
+            const month = Math.floor((Date.now() / 1000 - tx.blockTime) / (60 * 60 * 24 * 30));
+            txsByMonth[month] = (txsByMonth[month] || 0) + 1;
         });
+        const activeMonths = Object.keys(txsByMonth).length;
 
-        const activeDays = Object.keys(txsByDay).length;
-        if (activeDays < 2 && txs.length > 20) {
-            reject(`Clustered activity: ${txs.length} txs in ${activeDays} days only`);
-            return { warm: false, reason: "Clustered activity" };
+        if (activeMonths < 2) {
+            reject(`Activity: ${activeMonths}m (need 2+)`);
+            return { warm: false };
         }
 
-        // Check 5: Rapid-fire txs (bot behavior)
+        // Check 4: Balance >= 2 SOL
+        const balanceRes = await axios.post(HELIUS_RPC, {
+            jsonrpc: "2.0", id: 1, 
+            method: "getBalance", 
+            params: [creator]
+        }, { headers: HEADERS, timeout: 5000 });
+
+        const balanceSol = (balanceRes.data.result.value || 0) / 1e9;
+        if (balanceSol < 2) {
+            reject(`Balance: ${balanceSol.toFixed(3)}SOL (need 2+)`);
+            return { warm: false };
+        }
+
+        // Check 5: Failures < 10%
+        const failedTxs = txs.filter(tx => tx.err !== null).length;
+        const failureRate = (failedTxs / txs.length) * 100;
+
+        if (failureRate > 10) {
+            reject(`Failures: ${failureRate.toFixed(1)}% (need <10%)`);
+            return { warm: false };
+        }
+
+        // Check 6: Rapid-fire < 25%
         let rapidFireCount = 0;
         for (let i = 0; i < Math.min(100, txs.length - 1); i++) {
             if ((txs[i].blockTime - txs[i + 1].blockTime) < 3) {
                 rapidFireCount++;
             }
         }
-
         const rapidFirePercent = (rapidFireCount / Math.min(100, txs.length)) * 100;
-        if (rapidFirePercent > 50) {
-            reject(`Bot-like behavior: ${rapidFirePercent.toFixed(0)}% rapid-fire txs`);
-            return { warm: false, reason: "Bot behavior" };
+
+        if (rapidFirePercent > 25) {
+            reject(`Rapid-fire: ${rapidFirePercent.toFixed(0)}% (need <25%)`);
+            return { warm: false };
         }
 
-        // ✅ PASSED!
-        log(`   ✅ WARM WALLET VERIFIED`);
-        log(`   📅 Age: ${walletAgeDays.toFixed(1)} days`);
-        log(`   💼 Txs: ${txs.length}`);
-        log(`   📊 Active days: ${activeDays}`);
-        log(`   ⚡ Bot risk: ${rapidFirePercent.toFixed(0)}%\n`);
-
+        // ✅ ALL CHECKS PASSED
+        log(`   ✅ WARM WALLET OK`);
         return { 
             warm: true, 
             age: walletAgeDays.toFixed(1),
-            txCount: txs.length
+            txCount: txs.length,
+            balance: balanceSol.toFixed(3)
         };
 
     } catch (e) {
-        error(`Warm wallet check failed: ${e.message}`);
-        return { warm: false, reason: "API error" };
+        error(`Wallet check error: ${e.message}`);
+        return { warm: false };
     }
 }
 
 // ==================== SEND ALERT ====================
 
-async function sendAlert(mint, name, walletAge, txCount) {
+async function sendAlert(mint, name, metrics) {
     try {
         const report = 
-            `🌟 **PUMP.FUN NEW TOKEN - REAL DEV** 🌟\n\n` +
-            `🏷️ **Name:** ${name}\n` +
+            `🌟 **REAL DEV - PUMP.FUN** 🌟\n\n` +
+            `🏷️ **Token:** ${name}\n` +
             `📋 **Mint:** \`${mint}\`\n\n` +
-            `✅ **WARM WALLET VERIFIED:**\n` +
-            `• Dev Age: ${walletAge} days\n` +
-            `• Transactions: ${txCount}\n` +
-            `• Status: Real developer (not fresh wallet)\n\n` +
+            `✅ **VERIFIED:**\n` +
+            `• Age: ${metrics.age}d (90+)\n` +
+            `• Balance: ${metrics.balance}SOL (2+)\n` +
+            `• Txs: ${metrics.txCount}\n` +
+            `• Status: REAL DEVELOPER\n\n` +
             `💰 [Pump.Fun](https://pump.fun/${mint})\n` +
-            `📊 [DexScreener](https://dexscreener.com/solana/${mint})\n` +
-            `🔗 [Solscan](https://solscan.io/token/${mint})`;
+            `📊 [DexScreener](https://dexscreener.com/solana/${mint})`;
 
         await bot.sendMessage(TELEGRAM_CHAT_ID, report, { 
             parse_mode: 'Markdown',
             disable_web_page_preview: true
         });
         
-        log(`📤 ALERT SENT TO TELEGRAM!\n`);
+        log(`📤 ALERT SENT!\n`);
         return true;
 
     } catch (e) {
@@ -141,101 +144,86 @@ async function sendAlert(mint, name, walletAge, txCount) {
     }
 }
 
-// ==================== WEBSOCKET MONITORING ====================
+// ==================== PUMP.FUN API MONITORING ====================
 
-function startRadar() {
-    const ws = new WebSocket('wss://pumpportal.fun/api/data');
-    let reconnectAttempts = 0;
+async function monitorPumpFun() {
+    let lastCheck = 0;
     let tokenCounter = 0;
     let passedCounter = 0;
     let rejectedCounter = 0;
 
-    ws.on('open', () => {
-        log('📡 WebSocket Connected - Monitoring Pump.Fun New Tokens\n');
-        reconnectAttempts = 0;
-        
-        // Subscribe to token trades
-        ws.send(JSON.stringify({ "method": "subscribeTokenTrade" }));
-        
-        // Statistics every 5 minutes
-        setInterval(() => {
-            log(`\n📊 STATISTICS (Last 5 min):`);
-            log(`   Tokens processed: ${tokenCounter}`);
-            log(`   Warm wallet found: ${passedCounter}`);
-            log(`   Rejected: ${rejectedCounter}\n`);
-            tokenCounter = 0;
-            passedCounter = 0;
-            rejectedCounter = 0;
-        }, 300000);
-    });
+    log('📡 Starting Pump.Fun API Monitor\n');
 
-    ws.on('message', async (data) => {
+    while (true) {
         try {
-            const event = JSON.parse(data.toString());
-            
-            if (!event.mint || alertedMints.has(event.mint)) return;
-
-            tokenCounter++;
-
-            // Target: NEW tokens on Pump.Fun
-            // These are FRESH tokens, just launched
-            // Market cap doesn't matter (they're all low on Pump.Fun initially)
-            const marketCap = event.marketCapSol || 0;
-
-            // Log every 50 tokens to show activity
-            if (tokenCounter % 50 === 0) {
-                log(`📊 Processing tokens... (Latest: ${event.name}, Cap: ${marketCap.toFixed(2)} SOL)`);
-            }
-
-            // KEY: Check ALL tokens on Pump.Fun (no market cap filter)
-            // Just verify if developer is real (warm wallet)
-            alertedMints.add(event.mint);
-
-            log(`\n🎯 NEW TOKEN DETECTED: ${event.name}`);
-            log(`   Mint: ${event.mint}`);
-            log(`   Cap: ${marketCap.toFixed(2)} SOL`);
-            log(`   Dev: ${event.traderPublicKey?.slice(0, 10) || "unknown"}...`);
-            log(`   Checking warm wallet...`);
-
-            const walletCheck = await checkWarmWallet(
-                event.traderPublicKey || event.user || "unknown"
+            // Pump.Fun API endpoint for latest tokens
+            const response = await axios.get(
+                'https://api.pump.fun/api/v1/tokens?limit=100&offset=0&sort=newest',
+                { timeout: 10000 }
             );
 
-            if (walletCheck.warm) {
-                log(`\n🚀 TOKEN PASSED - SENDING ALERT!\n`);
-                passedCounter++;
-                await sendAlert(
-                    event.mint, 
-                    event.name,
-                    walletCheck.age,
-                    walletCheck.txCount
-                );
-            } else {
-                rejectedCounter++;
+            const tokens = response.data?.tokens || response.data || [];
+
+            if (!Array.isArray(tokens)) {
+                log(`⚠️ No tokens array in response`);
+                await new Promise(r => setTimeout(r, 5000));
+                continue;
             }
 
+            log(`📊 Pump.Fun API: Fetched ${tokens.length} tokens`);
+
+            for (const token of tokens) {
+                const mint = token.mint || token.address || token.id;
+                if (!mint || alertedMints.has(mint)) continue;
+
+                tokenCounter++;
+                const name = token.name || token.symbol || 'Unknown';
+                const creator = token.creator || token.dev || token.deployer;
+
+                if (tokenCounter % 10 === 0) {
+                    log(`📊 Scanning... Token #${tokenCounter}: ${name}`);
+                }
+
+                alertedMints.add(mint);
+
+                log(`\n🎯 NEW TOKEN: ${name}`);
+                log(`   Mint: ${mint}`);
+                log(`   Dev: ${creator?.slice(0, 10) || 'unknown'}...`);
+
+                if (!creator) {
+                    reject(`No creator address`);
+                    rejectedCounter++;
+                    continue;
+                }
+
+                const walletCheck = await checkWarmWallet(creator);
+
+                if (walletCheck.warm) {
+                    log(`\n🚀 REAL DEV! SENDING ALERT!\n`);
+                    passedCounter++;
+                    await sendAlert(mint, name, walletCheck);
+                } else {
+                    rejectedCounter++;
+                }
+
+                await new Promise(r => setTimeout(r, 500));
+            }
+
+            // Statistics every check
+            log(`\n📊 CHECK STATS:`);
+            log(`   Scanned: ${tokenCounter}`);
+            log(`   Real devs: ${passedCounter} ✅`);
+            log(`   Rejected: ${rejectedCounter} ❌\n`);
+
+            // Wait 30 seconds before next check
+            await new Promise(r => setTimeout(r, 30000));
+
         } catch (e) {
-            // Silently ignore parse errors
+            error(`Pump.Fun API error: ${e.message}`);
+            log(`⏳ Retrying in 10 seconds...\n`);
+            await new Promise(r => setTimeout(r, 10000));
         }
-    });
-
-    ws.on('error', (err) => {
-        error(`WebSocket error: ${err.message}`);
-    });
-
-    ws.on('close', () => {
-        log('⚠️ WebSocket disconnected');
-        
-        if (reconnectAttempts < 10) {
-            reconnectAttempts++;
-            const delay = Math.min(5000 * reconnectAttempts, 30000);
-            log(`🔄 Reconnecting in ${delay / 1000}s (Attempt ${reconnectAttempts}/10)...`);
-            setTimeout(startRadar, delay);
-        } else {
-            error('Max reconnection attempts reached. Exiting.');
-            process.exit(1);
-        }
-    });
+    }
 }
 
 // ==================== STARTUP ====================
@@ -244,11 +232,10 @@ async function startup() {
     console.clear();
     console.log(`
 ╔════════════════════════════════════════════════════════════╗
-║  🚀 V10.0 PUMP.FUN NEW TOKEN DETECTOR                     ║
-║  🔥 Warm Wallet Detection Only                            ║
-║  💰 Direct Solana Blockchain Monitoring                   ║
-║  ✅ No Authority/Distribution Checks (Bonding Curve)      ║
-║  📊 Detailed Logging on All Rejections                    ║
+║  🚀 V11.0 - PUMP.FUN API DIRECT                           ║
+║  🔥 Real Dev Detection (90+d, 2+mo, 2+SOL)                ║
+║  💰 Direct API Monitoring                                 ║
+║  ✅ No PumpPortal WebSocket                                ║
 ╚════════════════════════════════════════════════════════════╝
     `);
 
@@ -257,18 +244,18 @@ async function startup() {
     log(`💬 Chat ID: ${TELEGRAM_CHAT_ID}`);
     log(`🔗 RPC: ${HELIUS_RPC.slice(0, 40)}...\n`);
 
-    log("Starting Pump.Fun Monitor...\n");
-    startRadar();
+    log("Connecting to Pump.Fun API...\n");
+    await monitorPumpFun();
 }
 
 // Graceful shutdown
 process.on('SIGINT', () => {
-    log('\n\n🛑 Shutting down gracefully...');
+    log('\n\n🛑 Shutting down...');
     process.exit(0);
 });
 
 process.on('SIGTERM', () => {
-    log('\n\n🛑 Shutting down gracefully...');
+    log('\n\n🛑 Shutting down...');
     process.exit(0);
 });
 
