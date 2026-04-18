@@ -6,6 +6,7 @@ const axios = require('axios');
 // ================= CONFIG =================
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+const HELIUS = process.env.HELIUS_RPC;
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
@@ -13,7 +14,6 @@ const seen = new Set();
 const devTracker = {};
 
 const log = (m) => console.log(`[${new Date().toLocaleTimeString()}] ${m}`);
-
 const cleanMint = (m) => m.replace('pump', '');
 
 // ================= DEX =================
@@ -32,8 +32,6 @@ async function devAudit(address) {
         if (!address) {
             return { score: 0, age: "Unknown", sol: "0.00", txCount: 0, status: "Scammer ❌" };
         }
-
-        const HELIUS = process.env.HELIUS_RPC;
 
         const [bal, txs] = await Promise.all([
             axios.post(HELIUS, {
@@ -119,8 +117,9 @@ function trackDev(wallet) {
     return devTracker[wallet].count;
 }
 
-// ================= SCORE =================
-function scoreToken(dex, devScore, devBuys) {
+// ================= ANALYZE (DEBUG ENGINE) =================
+function analyzeToken(dex, dev, devBuys) {
+    const reasons = [];
     let score = 0;
 
     const liq = dex.liquidity?.usd || 0;
@@ -128,23 +127,32 @@ function scoreToken(dex, devScore, devBuys) {
     const mc = dex.fdv || 0;
 
     if (liq > 5000) score += 25;
+    else reasons.push(`Low Liquidity ($${Math.floor(liq)})`);
+
     if (liq > 15000) score += 15;
 
     if (vol > 2000) score += 20;
+    else reasons.push(`Low Volume ($${Math.floor(vol)})`);
+
     if (vol > 10000) score += 20;
 
     if (mc < 100000) score += 15;
+    else reasons.push(`High MC ($${Math.floor(mc)})`);
 
-    if (devScore >= 40) score += 20;
-    if (devScore >= 70) score += 10;
+    if (dev.score >= 40) score += 20;
+    else reasons.push(`Weak Dev (${dev.score})`);
+
+    if (dev.score >= 70) score += 10;
 
     if (devBuys >= 2) score += 10;
+    else reasons.push(`Low Dev Buys (${devBuys})`);
+
     if (devBuys >= 4) score += 15;
 
-    return score;
+    return { score, reasons, liq, vol, mc };
 }
 
-// ================= ALERT FORMAT =================
+// ================= ALERT =================
 function formatAlert(dex, mint, score, dev, devBuys) {
     return `
 🚀 *JUNNI X GEM ALERT*
@@ -164,7 +172,7 @@ function formatAlert(dex, mint, score, dev, devBuys) {
 ⚡ Dev Buys: *${devBuys}*
 ⭐ Score: *${score}/100*
 
-🔗 [View Chart](https://dexscreener.com/solana/${mint})
+🔗 https://dexscreener.com/solana/${mint}
 `;
 }
 
@@ -192,15 +200,28 @@ function startRadar() {
             if (!dex) return;
 
             const dev = await devAudit(devWallet);
-            const score = scoreToken(dex, dev.score, devBuys);
+            const { score, reasons, liq, vol, mc } = analyzeToken(dex, dev, devBuys);
 
-            const liq = dex.liquidity?.usd || 0;
+            // 🔥 DEBUG LOG
+            console.log(`
+----------------------------
+Token: ${dex.baseToken.name}
+MC: $${Math.floor(mc)}
+Liq: $${Math.floor(liq)}
+Vol5m: $${Math.floor(vol)}
+Dev Score: ${dev.score}
+Dev Buys: ${devBuys}
+Final Score: ${score}
+
+${score >= 60 ? "✅ ACCEPTED" : "❌ REJECTED"}
+${reasons.length ? "Reasons: " + reasons.join(", ") : ""}
+----------------------------
+`);
 
             if (score >= 60 && liq > 5000) {
                 seen.add(mint);
 
                 const msg = formatAlert(dex, mint, score, dev, devBuys);
-
                 bot.sendMessage(CHAT_ID, msg, { parse_mode: "Markdown" });
             }
 
@@ -214,3 +235,8 @@ function startRadar() {
 }
 
 startRadar();
+
+// ================= TEST =================
+bot.onText(/\/ping/, (msg) => {
+    bot.sendMessage(msg.chat.id, "✅ Bot Running");
+});
