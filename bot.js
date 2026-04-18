@@ -430,7 +430,7 @@ function startRadar() {
             const event = JSON.parse(data.toString());
             
             // Target tokens near Raydium graduation (82-85 SOL market cap)
-            if (event.marketCapSol >= 82 && event.marketCapSol <= 100) {
+            if (event.marketCapSol >= 12 && event.marketCapSol <= 100) {
                 if (!alertedMints.has(event.mint)) {
                     alertedMints.add(event.mint);
                     
