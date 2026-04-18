@@ -11,82 +11,76 @@ const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: { autoStart: true } });
 const alertedMints = new Set();
 const HEADERS = { 'Content-Type': 'application/json' };
 
-console.log('💎 V82 ONLINE: PumpSwap (Raydium) Hunter Mode Active.');
+console.log('📡 V83 ONLINE: Active Graduation Hunter & Trade Streamer...');
 
-async function checkRaydiumGem(mint, chatId = TELEGRAM_CHAT_ID) {
+async function checkMigrationGem(mint, mcap, chatId = TELEGRAM_CHAT_ID) {
     try {
-        // 1. Holder Check - Ab Bonding Curve (80%) nahi hona chahiye kyunke token migrate ho chuka hai
+        console.log(`🔍 Forensic Check for: ${mint.substring(0,8)}... (MCap: ${mcap.toFixed(1)} SOL)`);
+        
+        // Holder Distribution Check
         const holdersRes = await axios.post(HELIUS_RPC, { 
             jsonrpc: "2.0", id: 1, method: "getTokenLargestAccounts", params: [mint] 
         }, { headers: HEADERS });
         
         const holders = holdersRes.data.result.value;
-        if (!holders || holders.length < 10) return;
+        if (!holders || holders.length < 5) return;
 
-        // Raydium par jane ke baad holder distribution bohat sakht honi chahiye
         let top10Sum = 0;
+        // Raydium par jane ke baad Top 10 (excluding Raydium Pool if possible)
         holders.slice(0, 10).forEach(h => top10Sum += (h.uiAmount / 1000000000) * 100);
 
-        // 🛑 SAKHT FILTER: Top 10 holders should have less than 20% total (Organic Community)
-        if (top10Sum > 20) {
-            console.log(`⏩ [${mint.substring(0,6)}] Reject: Too centralized on Raydium (${top10Sum.toFixed(1)}%)`);
+        if (top10Sum > 25) {
+            console.log(`❌ REJECTED: Distribution too heavy (${top10Sum.toFixed(1)}%)`);
             return;
         }
 
-        // 2. Metadata & Socials Check
         const assetRes = await axios.post(HELIUS_RPC, { jsonrpc: "2.0", id: 1, method: "getAsset", params: { id: mint } }, { headers: HEADERS });
-        const asset = assetRes.data.result;
-        const metaStr = JSON.stringify(asset || "").toLowerCase();
+        const metaStr = JSON.stringify(assetRes.data.result || "").toLowerCase();
         const hasSocials = metaStr.includes("t.me/") || metaStr.includes("x.com/") || metaStr.includes("twitter.com/");
 
-        if (!hasSocials) {
-            console.log(`⏩ [${mint.substring(0,6)}] Reject: No Socials on graduation.`);
-            return;
+        if (hasSocials) {
+            const name = assetRes.data.result?.content?.metadata?.name || "Unknown";
+            const report = `🎓 **PUMPSWAP / RAYDIUM GEM** 🎓\n\n` +
+                           `🏷️ **Name:** ${name}\n` +
+                           `💰 **Market Cap:** ${mcap.toFixed(1)} SOL ✅\n` +
+                           `👥 **Top 10 Holders:** ${top10Sum.toFixed(1)}% ✅\n\n` +
+                           `🔗 [DexScreener](https://dexscreener.com/solana/${mint})`;
+            
+            await bot.sendMessage(chatId, report, { parse_mode: 'Markdown' });
+            console.log(`✅ ALERT SENT: ${name}`);
         }
-
-        const name = asset?.content?.metadata?.name || "Unknown";
-        console.log(`✅ PUMPSWAP GEM DETECTED: ${name}`);
-
-        const report = `🎓 **PUMPSWAP GRADUATION ALERT** 🎓\n\n` +
-                       `🏷️ **Name:** ${name}\n` +
-                       `✅ **Status:** Successfully Migrated to Raydium\n` +
-                       `👥 **Top 10 Holders:** ${top10Sum.toFixed(1)}% (Safe Distro)\n` +
-                       `🌐 **Socials:** Verified\n\n` +
-                       `🚀 *This token has survived Pump.fun and is now on the open market!*\n\n` +
-                       `🔗 [DexScreener](https://dexscreener.com/solana/${mint})\n` +
-                       `🛒 [Swap on Raydium](https://raydium.io/swap/?inputMint=sol&outputMint=${mint})`;
-
-        await bot.sendMessage(chatId, report, { parse_mode: 'Markdown', disable_web_page_preview: true });
-
-    } catch (e) { console.log(`Migration Scan Error: ${e.message}`); }
+    } catch (e) { console.log(`Error: ${e.message}`); }
 }
 
 function startRadar() {
-    // Ab hum sirf graduation events ko listen karenge
     const ws = new WebSocket('wss://pumpportal.fun/api/data');
     
     ws.on('open', () => {
-        console.log('✅ Connected: Hunting for Raydium Migrations...');
-        // Subscribe to event where bonding curve is completed
-        ws.send(JSON.stringify({ "method": "subscribeTokenTrade" })); 
+        console.log('✅ WebSocket Connected - Streaming Trades...');
+        ws.send(JSON.stringify({ "method": "subscribeTokenTrade" }));
     });
 
     ws.on('message', async (data) => {
-        const event = JSON.parse(data.toString());
-        
-        // PumpPortal "mint" ke bajaye "txType" bhejta hai jab token graduate hota hai
-        // Hum check karenge ke kya token migration complete hui hai
-        if (event.txType === 'subscribeTokenTrade' && event.marketCapSol >= 80) { 
-            if (!alertedMints.has(event.mint)) {
-                alertedMints.add(event.mint);
-                console.log(`🎓 Token Graduate Hua: ${event.mint.substring(0,8)}... Checking Raydium safety.`);
-                // 30 second wait karein taake liquidity properly add ho jaye
-                setTimeout(() => checkRaydiumGem(event.mint), 30000);
+        try {
+            const event = JSON.parse(data.toString());
+            
+            // Logs mein har trade dikhayega taake tasalli rahe ke bot chal raha hai
+            if (event.mint) {
+                // Graduation ki dehleez (78 SOL se upar)
+                if (event.marketCapSol >= 78 && !alertedMints.has(event.mint)) {
+                    alertedMints.add(event.mint);
+                    console.log(`🔥 GRADUATION DETECTED: ${event.mint.substring(0,8)}...`);
+                    setTimeout(() => checkMigrationGem(event.mint, event.marketCapSol), 10000);
+                }
             }
-        }
+        } catch (e) {}
     });
 
-    ws.on('close', () => setTimeout(startRadar, 3000));
+    ws.on('error', (err) => console.log('WebSocket Error:', err.message));
+    ws.on('close', () => {
+        console.log('🔄 Connection closed. Reconnecting...');
+        setTimeout(startRadar, 3000);
+    });
 }
 
 startRadar();
