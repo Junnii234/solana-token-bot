@@ -11,133 +11,132 @@ const HELIUS_RPC = process.env.HELIUS_RPC || `https://mainnet.helius-rpc.com/?ap
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 const alertedMints = new Set();
 const HEADERS = { 'Content-Type': 'application/json' };
-
 const log = (msg) => console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
 
-// ==================== ENHANCED FETCH LOGIC ====================
+// ==================== IMPROVED FORENSIC ENGINE ====================
 
 async function fullAudit(mint) {
     try {
-        // Method 1: Try DAS API (getAsset)
-        let res = await axios.post(HELIUS_RPC, {
+        const res = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, method: "getAsset", params: { id: mint }
-        }, { headers: HEADERS, timeout: 7000 });
+        }, { headers: HEADERS, timeout: 8000 });
 
-        let asset = res.data.result;
+        const asset = res.data.result;
+        if (!asset) return null;
 
-        // Method 2 Fallback: Agar getAsset fail ho jaye (Pump.fun issue)
-        if (!asset) {
-            log(`⚠️ getAsset failed for ${mint.slice(0,5)}, trying fallback...`);
-            const fallback = await axios.post(HELIUS_RPC, {
-                jsonrpc: "2.0", id: 1, method: "getAccountInfo", params: [mint, { encoding: "jsonParsed" }]
-            }, { headers: HEADERS });
-            if (!fallback.data.result) return null;
-            // Basic data for fallback
-            asset = { 
-                mutable: true, // assume risky if DAS fails
-                content: { metadata: { name: "Unknown (Fallback)" } },
-                authorities: [] 
-            };
-        }
-
+        // Metadata Audit (Crucial: Mutable MUST be false)
         const isImmutable = asset.mutable === false;
         const noFreeze = !asset.authorities?.some(a => a.scopes?.includes('freeze'));
         
-        // Token Supply & Holders
+        // Holder Audit
         const holders = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, method: "getTokenLargestAccounts", params: [mint]
         }, { headers: HEADERS, timeout: 5000 });
 
-        const top1 = holders.data.result?.value?.[0]?.amount || 0;
-        const supply = asset.token_info?.supply || 1000000000000000; // Default large supply
-        const isCleanDist = (top1 / supply) < 0.20; // 20% limit for safer testing
+        const top1 = (holders.data.result?.value?.[0]?.amount || 0);
+        const supply = asset.token_info?.supply || 1000000000 * 1e6;
+        const isCleanDist = (top1 / supply) < 0.15; // 15% Cap
 
         return { 
             safe: isImmutable && noFreeze && isCleanDist, 
-            name: asset.content?.metadata?.name || "Token",
+            name: asset.content?.metadata?.name || "Unknown",
             isImmutable, noFreeze, isCleanDist,
             creator: asset.authorities?.[0]?.address || asset.token_info?.mint_authority || null
         };
-    } catch (e) {
-        log(`❌ Audit Error: ${e.message}`);
-        return null;
-    }
+    } catch (e) { return null; }
 }
 
 async function devAudit(address) {
     try {
         if (!address) return { score: 0, age: 0, sol: 0, txs: 0 };
+
+        // Fetching more transactions to find the true first one
         const [bal, txs] = await Promise.all([
             axios.post(HELIUS_RPC, { jsonrpc: "2.0", id: 1, method: "getBalance", params: [address] }),
-            axios.post(HELIUS_RPC, { jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [address, { limit: 50 }] })
+            axios.post(HELIUS_RPC, { jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [address, { limit: 100 }] })
         ]);
 
         const sol = (bal.data.result?.value || 0) / 1e9;
         const history = txs.data.result || [];
-        const age = history.length > 1 ? (history[0].blockTime - history[history.length-1].blockTime) / 86400 : 0;
+        
+        let ageDays = 0;
+        if (history.length > 1) {
+            const newest = history[0].blockTime;
+            const oldest = history[history.length - 1].blockTime;
+            ageDays = (newest - oldest) / 86400; // Time in days
+            
+            // If Helius only gives recent txs, we check if the wallet is fundamentally "old"
+            // through a second check or simply by increasing the limit.
+        }
 
+        // --- SCORING SYSTEM (Based on your Warm Wallet Table) ---
         let score = 0;
-        if (age >= 14) score += 40; if (sol >= 0.2) score += 30; if (history.length >= 10) score += 30;
+        if (ageDays >= 30) score += 40; 
+        else if (ageDays >= 7) score += 20;
 
-        return { score, age: age.toFixed(1), sol: sol.toFixed(2), txs: history.length };
+        if (sol >= 1.5) score += 30; 
+        else if (sol >= 0.5) score += 15;
+
+        if (history.length >= 50) score += 30; 
+        else if (history.length >= 10) score += 15;
+
+        return { 
+            score, 
+            age: ageDays < 0.1 ? "New/Active" : `${ageDays.toFixed(1)} Days`, 
+            sol: sol.toFixed(2), 
+            txCount: history.length 
+        };
     } catch (e) { return { score: 0, age: 0, sol: 0, txs: 0 }; }
 }
 
-// ==================== COMMANDS ====================
+// ==================== COMMANDS & RADAR ====================
 
 bot.onText(/\/test (.+)/, async (msg, match) => {
-    const chatId = msg.chat.id;
     const testMint = match[1].trim();
-    
-    bot.sendMessage(chatId, `⏳ Fetching data for \`${testMint}\`...`, { parse_mode: 'Markdown' });
+    bot.sendMessage(msg.chat.id, `🧬 Analyzing Forensics for: \`${testMint}\`...`, { parse_mode: 'Markdown' });
 
     const audit = await fullAudit(testMint);
-    if (!audit) {
-        return bot.sendMessage(chatId, "❌ Error: Could not reach Solana RPC or Mint is invalid. Check Helius Key.");
-    }
+    if (!audit) return bot.sendMessage(msg.chat.id, "❌ RPC Error: Verify Address.");
 
     const dev = await devAudit(audit.creator);
 
-    const report = `📊 **AUDIT RESULTS**\n\n` +
+    const report = `📊 **AUDIT RESULTS V11.5**\n\n` +
                    `🏷️ **Token:** ${audit.name}\n` +
-                   `🛡️ **Security:**\n` +
-                   `- Immutable: ${audit.isImmutable ? '✅' : '❌'}\n` +
-                   `- No Freeze: ${audit.noFreeze ? '✅' : '❌'}\n` +
-                   `- Top Holder Check: ${audit.isCleanDist ? '✅' : '❌'}\n\n` +
-                   `👴 **Dev Quality:** ${dev.score}/100\n` +
-                   `- Age: ${dev.age} Days\n` +
-                   `- Balance: ${dev.sol} SOL\n\n` +
+                   `🛡️ **Security Check:**\n` +
+                   `- Immutable (No Rug): ${audit.isImmutable ? '✅' : '❌'}\n` +
+                   `- No Freeze Auth: ${audit.noFreeze ? '✅' : '❌'}\n` +
+                   `- Holder Distribution: ${audit.isCleanDist ? '✅' : '❌'}\n\n` +
+                   `👴 **Dev Forensic:**\n` +
+                   `- Warmth Score: ${dev.score}/100\n` +
+                   `- Wallet Age: ${dev.age}\n` +
+                   `- Current Balance: ${dev.sol} SOL\n` +
+                   `- Total Activity: ${dev.txCount} Txs\n\n` +
                    `🏁 **Status:** ${audit.safe && dev.score >= 30 ? "PASSED ✅" : "FAILED ❌"}`;
 
-    bot.sendMessage(chatId, report);
+    bot.sendMessage(msg.chat.id, report);
 });
-
-// ==================== RADAR ====================
 
 function startRadar() {
     const ws = new WebSocket('wss://pumpportal.fun/api/data');
-    
     ws.on('open', () => {
-        log('📡 V11.3 Scanner Online | Use /test [mint]');
+        log('📡 V11.5 FIXED RADAR ONLINE');
         ws.send(JSON.stringify({ "method": "subscribeTokenTrade" }));
     });
-
     ws.on('message', async (data) => {
         try {
             const event = JSON.parse(data.toString());
             if (!event.mint || alertedMints.has(event.mint)) return;
-
             const mc = event.marketCapSol || 0;
             if (mc >= 60) {
                 alertedMints.add(event.mint);
                 const [audit, dev] = await Promise.all([fullAudit(event.mint), devAudit(event.traderPublicKey || event.user)]);
-                if (audit && audit.safe && dev.score >= 30) {
-                    bot.sendMessage(TELEGRAM_CHAT_ID, `🚀 **NEW GEM**\n\n${audit.name}\nMC: ${mc.toFixed(1)} SOL\nScore: ${dev.score}/100\n\n[DexScreener](https://dexscreener.com/solana/${event.mint})`, { parse_mode: 'Markdown' });
+                if (audit && audit.safe && dev.score >= 35) {
+                    const msg = `🚀 **GEM DETECTED**\n\n${audit.name}\nMC: ${mc.toFixed(1)} SOL\nDev Score: ${dev.score}\n\n[DexScreener](https://dexscreener.com/solana/${event.mint})`;
+                    bot.sendMessage(TELEGRAM_CHAT_ID, msg, { parse_mode: 'Markdown' });
                 }
             }
         } catch (e) {}
     });
-
     ws.on('close', () => setTimeout(startRadar, 3000));
 }
 
