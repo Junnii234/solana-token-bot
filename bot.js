@@ -107,48 +107,57 @@ async function sendAlert(mint, name, metrics) {
 // ==================== MONITORING LOGIC ====================
 
 function monitorPumpFun() {
-    log('📡 Initializing WebSocket Connection...');
+    log('📡 Monitoring GRADUATING tokens (Raydium Migration)...');
     const ws = new WebSocket('wss://pumpportal.fun/api/data');
 
     ws.on('open', () => {
-        log('✅ WebSocket Connected. Subscribing to New Tokens...');
-        ws.send(JSON.stringify({ "method": "subscribeNewToken" }));
+        log('✅ Connected! Watching for tokens migrating to Raydium...');
+        
+        // Yeh method sirf un tokens ka data bhejta hai jo migrate ho rahe hain
+        ws.send(JSON.stringify({ 
+            "method": "subscribeTokenTrade" 
+        }));
     });
 
     ws.on('message', async (data) => {
         try {
             const event = JSON.parse(data.toString());
-            const mint = event.mint;
-            const creator = event.traderPublicKey;
-            const name = event.symbol || 'Unknown';
+            
+            // Graduate token ki nishani: txType "raydium_migration" hota hai
+            if (event.txType === 'subscribeTokenTrade' || event.txType === 'raydium_migration') {
+                const mint = event.mint;
+                const name = event.symbol || 'Graduated Token';
+                
+                // Sirf migrate hone wale tokens ko filter karein
+                if (event.txType === 'raydium_migration') {
+                    if (!mint || alertedMints.has(mint)) return;
+                    alertedMints.add(mint);
 
-            if (!mint || alertedMints.has(mint)) return;
-            alertedMints.add(mint);
+                    log(`\n🎓 GRADUATE DETECTED: ${name}`);
+                    log(`   Mint: ${mint}`);
 
-            log(`\n🎯 NEW TOKEN DETECTED: ${name}`);
-            log(`   Mint: ${mint}`);
+                    // Graduate hone ke baad bhi Dev ka forensic zaroori hai
+                    // Hum check karenge ke jis dev ne graduate kiya wo purana hai ya nahi
+                    const creator = event.traderPublicKey; 
+                    const walletCheck = await checkWarmWallet(creator);
 
-            const walletCheck = await checkWarmWallet(creator);
-
-            if (walletCheck.warm) {
-                log(`🚀 CRITERIA MATCHED! Sending Telegram Alert...`);
-                await sendAlert(mint, name, walletCheck);
+                    if (walletCheck.warm) {
+                        log(`🚀 REAL DEV GRADUATED! SENDING ALERT!`);
+                        await sendAlert(mint, name, walletCheck);
+                    }
+                }
             }
-
         } catch (e) {
-            error(`Event Processing Error: ${e.message}`);
+            error(`Migration Monitor Error: ${e.message}`);
         }
     });
 
     ws.on('close', () => {
-        error('WebSocket Connection Closed.');
-        log('⏳ Reconnecting in 5 seconds...');
+        log('⏳ Connection lost. Reconnecting...');
         setTimeout(monitorPumpFun, 5000);
     });
 
-    ws.on('error', (err) => {
-        error(`WebSocket Error: ${err.message}`);
-    });
+    ws.on('error', (err) => error(`WS Error: ${err.message}`));
 }
 
 // ==================== STARTUP ====================
