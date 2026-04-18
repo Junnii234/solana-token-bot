@@ -15,12 +15,14 @@ const HEADERS = { 'Content-Type': 'application/json' };
 const log = (msg) => console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
 const error = (msg) => console.error(`[${new Date().toLocaleTimeString()}] ❌ ${msg}`);
 
-log('💎 ELITE SCANNER v4.8 - SMART BYPASS ENABLED');
+log('💎 ELITE SCANNER v5.0 - AUTHORITIES DISABLED');
+log('📡 Early Entry Mode: Focusing on Dev Quality & Holders\n');
 
-// ==================== WARM WALLET VALIDATION ====================
+// ==================== WARM WALLET VALIDATION (UNCHANGED) ====================
+
 async function validateWarmWallet(creator) {
     try {
-        log(`🧪 Step 1/5: WARM WALLET CHECK [${creator.slice(0,8)}...]`);
+        log(`🧪 Step 1/3: WARM WALLET CHECK [${creator.slice(0,8)}...]`);
         const res = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, 
             method: "getSignaturesForAddress", 
@@ -50,62 +52,70 @@ async function validateWarmWallet(creator) {
     } catch (e) { return { warm: false, reason: "RPC Error", score: 100 }; }
 }
 
-// ==================== AUTHORITY CHECK (SMART BYPASS) ====================
-async function checkAuthorities(mint, marketCap) {
-    try {
-        const res = await axios.post(HELIUS_RPC, { jsonrpc: "2.0", id: 1, method: "getAsset", params: { id: mint } }, { headers: HEADERS });
-        const asset = res.data.result;
+// ==================== HOLDER DISTRIBUTION (UNCHANGED) ====================
 
-        // Freeze Authority check (Hamesha safe honi chahiye)
-        if (asset.ownership?.frozen === false) return { safe: false, reason: "Freeze authority active" };
-
-        // Mint Authority Check (Only near Raydium graduation)
-        if (marketCap >= 80) {
-            if (asset.mutable === true) return { safe: false, reason: "Mint authority not revoked near graduation" };
-        }
-
-        return { safe: true };
-    } catch (e) { return { safe: false, reason: "Auth check failed" }; }
-}
-
-// ==================== HOLDER CHECK ====================
 async function checkHolderDistribution(mint) {
     try {
-        const res = await axios.post(HELIUS_RPC, { jsonrpc: "2.0", id: 1, method: "getTokenLargestAccounts", params: [mint] }, { headers: HEADERS });
+        log(`👥 Step 2/3: HOLDER DISTRIBUTION CHECK...`);
+        const res = await axios.post(HELIUS_RPC, {
+            jsonrpc: "2.0", id: 1, 
+            method: "getTokenLargestAccounts", 
+            params: [mint]
+        }, { headers: HEADERS, timeout: 10000 });
+
         const holders = res.data.result.value || [];
+        if (holders.length < 5) return { safe: false, reason: "Concentrated supply" };
+
         const top1 = (holders[0].uiAmount / 1000000000) * 100;
         if (top1 > 50) return { safe: false, reason: `Whale Alert: ${top1.toFixed(1)}%` };
+
         return { safe: true, top1 };
-    } catch (e) { return { safe: false, reason: "Holder check failed" }; }
+    } catch (e) { return { safe: false, reason: "Holder check error" }; }
 }
 
-// ==================== MAIN ANALYSIS ====================
-async function analyzeToken(mint, creator, name, marketCap) {
+// ==================== MAIN ANALYSIS (SMART UPDATED) ====================
+
+async function analyzeToken(mint, creator, name) {
     try {
         log(`\n🔍 Forensic Analysis: ${name}`);
         
+        // 1. Warm Wallet (MUST PASS)
         const warm = await validateWarmWallet(creator);
-        if (!warm.warm) { log(`   ❌ REJECT: ${warm.reason}`); return null; }
-        log(`   ✅ PASS: Warm Wallet Score ${warm.score.toFixed(0)}`);
+        if (!warm.warm) {
+            log(`   ❌ REJECT: ${warm.reason} | Score: ${warm.score.toFixed(0)}`);
+            return null;
+        }
+        log(`   ✅ PASS: Warm Wallet (Age: ${warm.details.ageDays} days)`);
 
-        const auth = await checkAuthorities(mint, marketCap);
-        if (!auth.safe) { log(`   ❌ REJECT: ${auth.reason}`); return null; }
-        log(`   ✅ PASS: Authorities Check (${marketCap < 80 ? 'Bonding Bypass' : 'Revoked'})`);
+        // 2. Authorities Check (DISABLED AS REQUESTED)
+        log(`   ⏩ SKIP: Mint/Freeze Authority Check (Disabled by User)`);
 
+        // 3. Holder Distribution (MUST PASS)
         const holders = await checkHolderDistribution(mint);
-        if (!holders.safe) { log(`   ❌ REJECT: ${holders.reason}`); return null; }
-        log(`   ✅ PASS: Holders Safe (${holders.top1.toFixed(1)}%)`);
+        if (!holders.safe) {
+            log(`   ❌ REJECT: ${holders.reason}`);
+            return null;
+        }
+        log(`   ✅ PASS: Holder Distribution Safe (${holders.top1.toFixed(1)}%)`);
 
-        return { score: warm.score, age: warm.details.ageDays, top1: holders.top1 };
+        return {
+            verdict: "SEND_ALERT",
+            details: {
+                warmthScore: warm.score,
+                walletAge: warm.details.ageDays,
+                holderTop1: holders.top1
+            }
+        };
     } catch (e) { return null; }
 }
 
-// ==================== RADAR ====================
+// ==================== RADAR & DETECTION ====================
+
 function startRadar() {
     const ws = new WebSocket('wss://pumpportal.fun/api/data');
     
     ws.on('open', () => {
-        log('📡 WebSocket Connected - Monitoring New Tokens & Trades');
+        log('📡 WebSocket Connected - High Visibility Mode');
         ws.send(JSON.stringify({ "method": "subscribeNewToken" })); 
         ws.send(JSON.stringify({ "method": "subscribeTokenTrade" })); 
     });
@@ -115,28 +125,31 @@ function startRadar() {
             const event = JSON.parse(data.toString());
             if (!event.mint || alertedMints.has(event.mint)) return;
 
-            // Live Traffic Log
+            // Log traffic for user visibility
             if (event.marketCapSol) {
-                console.log(`🔹 [TRAFFIC]: ${event.name || '???'} | MCap: ${event.marketCapSol.toFixed(2)} SOL`);
+                console.log(`🔹 [STREAM]: ${event.name || '???'} | ${event.marketCapSol.toFixed(2)} SOL`);
             }
 
-            // Analysis Trigger: Between 10 and 100 SOL
+            // Detection Trigger (10 SOL to 100 SOL)
             if (event.marketCapSol >= 10 && event.marketCapSol <= 100) {
                 alertedMints.add(event.mint);
-                log(`🎯 CANDIDATE DETECTED: ${event.name} (${event.marketCapSol.toFixed(1)} SOL)`);
+                log(`🎯 TARGET DETECTED: ${event.name} hits ${event.marketCapSol.toFixed(1)} SOL`);
 
                 setTimeout(async () => {
-                    const result = await analyzeToken(event.mint, event.traderPublicKey, event.name || "Unknown", event.marketCapSol);
-                    if (result) {
-                        const report = `🌟 **ELITE VERIFIED TOKEN** 🌟\n\n` +
+                    const result = await analyzeToken(event.mint, event.traderPublicKey, event.name || "Unknown");
+                    
+                    if (result && result.verdict === "SEND_ALERT") {
+                        const report = `🌟 **ELITE TOKEN VERIFIED** 🌟\n\n` +
                                        `🏷️ **Name:** ${event.name}\n` +
-                                       `👴 **Dev Age:** ${result.age} days\n` +
-                                       `👥 **Top Whale:** ${result.top1.toFixed(1)}%\n\n` +
+                                       `👴 **Dev Age:** ${result.details.walletAge} days\n` +
+                                       `🔥 **Warmth:** ${result.details.warmthScore.toFixed(0)}/100\n` +
+                                       `👥 **Top Whale:** ${result.details.holderTop1.toFixed(1)}%\n\n` +
                                        `🔗 [DexScreener](https://dexscreener.com/solana/${event.mint})`;
+
                         await bot.sendMessage(TELEGRAM_CHAT_ID, report, { parse_mode: 'Markdown' });
                         log(`🚀 ALERT SENT: ${event.name}`);
                     }
-                }, 10000); // 10s wait
+                }, 10000); // 10s wait for indexing
             }
         } catch (e) {}
     });
@@ -144,4 +157,7 @@ function startRadar() {
     ws.on('close', () => setTimeout(startRadar, 3000));
 }
 
+// Startup
+console.clear();
+log('💎 ELITE SCANNER v5.0 STARTING...');
 startRadar();
