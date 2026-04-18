@@ -5,8 +5,8 @@ const axios = require('axios');
 
 // ================= CONFIG =================
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
-const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
-const HELIUS = process.env.HELIUS_RPC;
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+const HELIUS_RPC = process.env.HELIUS_RPC;
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
