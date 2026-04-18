@@ -11,81 +11,68 @@ const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: { autoStart: true } });
 const alertedMints = new Set();
 const HEADERS = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' };
 
-console.log('⏳ V71 ONLINE: Time Machine Mode (Historical Holders + Launch Budget)');
-
-bot.onText(/\/test (.+)/, async (msg, match) => {
-    const testMint = match[1].trim();
-    bot.sendMessage(msg.chat.id, `🕒 *Time Machine Scanning Launch Phase...*`, {parse_mode: 'Markdown'});
-    performForensic(testMint, null, true, msg.chat.id);
-});
+console.log('📢 V73 ONLINE: Logs Enabled. Monitoring Solana...');
 
 async function performForensic(mint, providedDev, isManual = false, chatId = TELEGRAM_CHAT_ID) {
     try {
-        // 1. EXACT LAUNCH TRANSACTION & BUDGET
+        // 1. Launch Signature & Budget
         const sigs = await axios.post(HELIUS_RPC, { 
-            jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [mint, { limit: 50 }] 
+            jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [mint, { limit: 10 }] 
         }, { headers: HEADERS });
         
-        const allSigs = sigs.data.result;
-        const launchSig = allSigs[allSigs.length - 1].signature;
+        if (!sigs.data.result || sigs.data.result.length === 0) {
+            console.log(`❌ [${mint}] Skip: No signatures found (RPC delay).`);
+            return;
+        }
         
+        const launchSig = sigs.data.result[sigs.data.result.length - 1].signature;
         const txRes = await axios.post(HELIUS_RPC, { 
             jsonrpc: "2.0", id: 1, method: "getTransaction", 
             params: [launchSig, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed" }] 
         }, { headers: HEADERS });
 
-        const txData = txRes.data.result;
-        const launchBudget = txData.meta.preBalances[0] / 1e9; 
-        const devWallet = txData.transaction.message.accountKeys[0].pubkey;
+        const launchBudget = txRes.data.result.meta.preBalances[0] / 1e9;
 
-        // 2. 🕒 HISTORICAL HOLDER SCAN (Launch Phase)
-        // Hum pehle 20 signatures ko scan karenge taake shuruati holders mil sakein
-        const launchPhaseSigs = allSigs.slice(-20).reverse();
-        let whaleWallets = new Set();
-        
-        // Is phase mein jin wallets ne baray buy orders dale unhein pakro
-        for (let s of launchPhaseSigs) {
-            const detail = await axios.post(HELIUS_RPC, { 
-                jsonrpc: "2.0", id: 1, method: "getTransaction", 
-                params: [s.signature, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed" }] 
-            }, { headers: HEADERS });
-            
-            // Check for large token transfers/buys in early transactions
-            if(detail.data.result?.meta?.postTokenBalances) {
-                detail.data.result.meta.postTokenBalances.forEach(b => {
-                    if(b.owner !== "5Q544fKrSJuDbupS2YvS3287Z9SNMo7sD6YBa9C8DVz" && b.uiTokenAmount.uiAmount > 10000000) {
-                        whaleWallets.add(b.owner);
-                    }
-                });
-            }
-        }
+        // 2. Metadata Check
+        const assetRes = await axios.post(HELIUS_RPC, { jsonrpc: "2.0", id: 1, method: "getAsset", params: { id: mint } }, { headers: HEADERS });
+        const asset = assetRes.data.result;
+        const meta = JSON.stringify(asset || "").toLowerCase();
+        const hasSocials = meta.includes("t.me/") || meta.includes("x.com/") || meta.includes("twitter.com/");
 
-        // 3. Current vs Historical Logic check
-        // (For simplicity in this version, we calculate top concentration at scan time but tag it with history)
+        // 3. Holder Check
         const holdersRes = await axios.post(HELIUS_RPC, { jsonrpc: "2.0", id: 1, method: "getTokenLargestAccounts", params: [mint] }, { headers: HEADERS });
         let top10Pct = 0;
         holdersRes.data.result.value.slice(0, 10).forEach(h => top10Pct += (h.uiAmount / 1000000000) * 100);
 
-        // 4. Metadata
-        const assetRes = await axios.post(HELIUS_RPC, { jsonrpc: "2.0", id: 1, method: "getAsset", params: { id: mint } }, { headers: HEADERS });
-        const meta = JSON.stringify(assetRes.data.result || "").toLowerCase();
-        const hasSocials = meta.includes("t.me/") || meta.includes("x.com/") || meta.includes("twitter.com/");
+        // --- 📊 LOGGING LOGIC (Railway Logs mein nazar ayega) ---
+        const name = asset?.content?.metadata?.name || "Unknown";
+        console.log(`--- Investigating: ${name} (${mint.substring(0,6)}...) ---`);
+        console.log(`💰 Budget: ${launchBudget.toFixed(2)} SOL`);
+        console.log(`👥 Top 10: ${top10Pct.toFixed(1)}%`);
+        console.log(`🌐 Socials: ${hasSocials ? "Yes" : "No"}`);
 
-        const passAll = (launchBudget >= 0.2) && (top10Pct <= 35) && hasSocials;
-
-        if (passAll || isManual) {
-            const status = passAll ? "✅ PASSED" : "❌ REJECTED";
-            const report = `🏛️ *TIME MACHINE REPORT (${status})*\n\n` +
-                           `🏷️ **Name:** ${assetRes.data.result?.content?.metadata?.name || "Unknown"}\n` +
-                           `💰 **Launch Budget:** ${launchBudget.toFixed(2)} SOL\n` +
-                           `👥 **Launch Holders:** ${top10Pct.toFixed(1)}% (Top 10 Analysis)\n` +
-                           `🕵️‍♂️ **Early Whales:** ${whaleWallets.size} Detected\n` +
-                           `🌐 **Socials:** ${hasSocials ? '✅' : '❌'}\n\n` +
+        // Filtering Logic
+        if (launchBudget < 0.2) {
+            console.log(`⛔ REJECTED: Budget too low (${launchBudget.toFixed(2)} SOL)`);
+        } else if (top10Pct > 35) {
+            console.log(`⛔ REJECTED: Concentration too high (${top10Pct.toFixed(1)}%)`);
+        } else if (!hasSocials) {
+            console.log(`⛔ REJECTED: No Social Links found.`);
+        } else {
+            console.log(`✅ PASSED: Sending alert to Telegram!`);
+            const report = `📊 *EXACT LAUNCH FORENSIC (✅ PASSED)*\n\n` +
+                           `🏷️ **Name:** ${name}\n` +
+                           `💰 **Launch Budget:** ${launchBudget.toFixed(2)} SOL ✅\n` +
+                           `👥 **Top 10 Holders:** ${top10Pct.toFixed(1)}% ✅\n` +
+                           `🌐 **Socials:** ✅\n\n` +
                            `🔗 [Jupiter](https://jup.ag/swap/SOL-${mint}) | [DexScreener](https://dexscreener.com/solana/${mint})`;
-
             await bot.sendMessage(chatId, report, { parse_mode: 'Markdown', disable_web_page_preview: true });
         }
-    } catch (e) { console.log("Time Machine Error:", e.message); }
+        console.log(`-------------------------------------------`);
+
+    } catch (e) {
+        console.log(`⚠️ Error scanning ${mint}: ${e.message}`);
+    }
 }
 
 function startRadar() {
