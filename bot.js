@@ -15,14 +15,14 @@ const HEADERS = { 'Content-Type': 'application/json' };
 const log = (msg) => console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
 const error = (msg) => console.error(`[${new Date().toLocaleTimeString()}] ❌ ${msg}`);
 
-log('💎 ELITE SCANNER v5.0 - AUTHORITIES DISABLED');
-log('📡 Early Entry Mode: Focusing on Dev Quality & Holders\n');
+log('💎 ELITE SCANNER v5.2 - GRADUATED TOKENS ONLY');
+log('🛡️ All Safety Checks Reset: Mint & Freeze Authority MUST be Disabled\n');
 
-// ==================== WARM WALLET VALIDATION (UNCHANGED) ====================
+// ==================== WARM WALLET VALIDATION ====================
 
 async function validateWarmWallet(creator) {
     try {
-        log(`🧪 Step 1/3: WARM WALLET CHECK [${creator.slice(0,8)}...]`);
+        log(`🧪 Step 1/4: WARM WALLET CHECK [${creator.slice(0,8)}...]`);
         const res = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, 
             method: "getSignaturesForAddress", 
@@ -30,93 +30,84 @@ async function validateWarmWallet(creator) {
         }, { headers: HEADERS, timeout: 10000 });
 
         const txs = res.data.result || [];
-        if (txs.length === 0) return { warm: false, reason: "New Wallet (0 txs)", score: 100 };
+        if (txs.length === 0) return { warm: false, reason: "New Wallet", score: 100 };
 
-        const oldestTx = txs[txs.length - 1];
-        const newestTx = txs[0];
-        const walletAgeDays = ((newestTx.blockTime - oldestTx.blockTime) * 1000) / (1000 * 60 * 60 * 24);
+        const walletAgeDays = ((txs[0].blockTime - txs[txs.length-1].blockTime) * 1000) / (1000 * 60 * 60 * 24);
+        if (walletAgeDays < 30) return { warm: false, reason: `Too young: ${walletAgeDays.toFixed(0)}d`, score: 85 };
 
-        if (walletAgeDays < 30) return { warm: false, reason: `Too young: ${walletAgeDays.toFixed(0)} days`, score: 85 };
-
-        const balanceRes = await axios.post(HELIUS_RPC, {
-            jsonrpc: "2.0", id: 1, method: "getBalance", params: [creator]
-        }, { headers: HEADERS });
-        const balanceSol = (balanceRes.data.result.value || 0) / 1e9;
-
-        let warmthScore = Math.min(100, Math.max(0, (100 - walletAgeDays) / 2 + (1 - balanceSol) * 30));
-        return {
-            warm: warmthScore < 35,
-            score: warmthScore,
-            details: { ageDays: walletAgeDays.toFixed(1), totalTxs: txs.length, balanceSol: balanceSol.toFixed(4) }
-        };
-    } catch (e) { return { warm: false, reason: "RPC Error", score: 100 }; }
+        let warmthScore = Math.max(0, (100 - walletAgeDays) / 2);
+        return { warm: warmthScore < 35, score: warmthScore, age: walletAgeDays.toFixed(1) };
+    } catch (e) { return { warm: false, reason: "RPC Error" }; }
 }
 
-// ==================== HOLDER DISTRIBUTION (UNCHANGED) ====================
+// ==================== FULL AUTHORITY CHECK (RESET) ====================
 
-async function checkHolderDistribution(mint) {
+async function checkAuthorities(mint) {
     try {
-        log(`👥 Step 2/3: HOLDER DISTRIBUTION CHECK...`);
-        const res = await axios.post(HELIUS_RPC, {
-            jsonrpc: "2.0", id: 1, 
-            method: "getTokenLargestAccounts", 
-            params: [mint]
-        }, { headers: HEADERS, timeout: 10000 });
+        log(`🛡️ Step 2/4: AUTHORITY CHECK (Mint & Freeze)...`);
+        const res = await axios.post(HELIUS_RPC, { 
+            jsonrpc: "2.0", id: 1, method: "getAsset", params: { id: mint } 
+        }, { headers: HEADERS });
+        
+        const asset = res.data.result;
+        
+        // 1. Mint Authority Check
+        if (asset.mutable === true) return { safe: false, reason: "Mint authority ACTIVE" };
+        
+        // 2. Freeze Authority Check
+        if (asset.ownership?.frozen === false) return { safe: false, reason: "Freeze authority ACTIVE" };
 
-        const holders = res.data.result.value || [];
-        if (holders.length < 5) return { safe: false, reason: "Concentrated supply" };
-
-        const top1 = (holders[0].uiAmount / 1000000000) * 100;
-        if (top1 > 50) return { safe: false, reason: `Whale Alert: ${top1.toFixed(1)}%` };
-
-        return { safe: true, top1 };
-    } catch (e) { return { safe: false, reason: "Holder check error" }; }
+        return { safe: true };
+    } catch (e) { return { safe: false, reason: "Auth check failed" }; }
 }
 
-// ==================== MAIN ANALYSIS (SMART UPDATED) ====================
+// ==================== HOLDER CHECK (WITH RETRY) ====================
+
+async function checkHolderDistribution(mint, retries = 3) {
+    for (let i = 0; i < retries; i++) {
+        try {
+            log(`👥 Step 3/4: HOLDER CHECK (Attempt ${i+1})...`);
+            const res = await axios.post(HELIUS_RPC, {
+                jsonrpc: "2.0", id: 1, method: "getTokenLargestAccounts", params: [mint]
+            }, { headers: HEADERS, timeout: 10000 });
+
+            const holders = res.data.result?.value;
+            if (holders && holders.length > 0) {
+                const top1 = (holders[0].uiAmount / 1000000000) * 100;
+                if (top1 > 50) return { safe: false, reason: `Whale Alert: ${top1.toFixed(1)}%` };
+                return { safe: true, top1 };
+            }
+            await new Promise(r => setTimeout(r, 2000));
+        } catch (e) { if (i === retries-1) return { safe: false, reason: "Holder error" }; }
+    }
+}
+
+// ==================== MAIN ANALYSIS ====================
 
 async function analyzeToken(mint, creator, name) {
     try {
-        log(`\n🔍 Forensic Analysis: ${name}`);
+        log(`\n🔍 Analyzing Graduate Candidate: ${name}`);
         
-        // 1. Warm Wallet (MUST PASS)
         const warm = await validateWarmWallet(creator);
-        if (!warm.warm) {
-            log(`   ❌ REJECT: ${warm.reason} | Score: ${warm.score.toFixed(0)}`);
-            return null;
-        }
-        log(`   ✅ PASS: Warm Wallet (Age: ${warm.details.ageDays} days)`);
+        if (!warm.warm) { log(`   ❌ REJECT: ${warm.reason}`); return null; }
 
-        // 2. Authorities Check (DISABLED AS REQUESTED)
-        log(`   ⏩ SKIP: Mint/Freeze Authority Check (Disabled by User)`);
+        const auth = await checkAuthorities(mint);
+        if (!auth.safe) { log(`   ❌ REJECT: ${auth.reason}`); return null; }
 
-        // 3. Holder Distribution (MUST PASS)
         const holders = await checkHolderDistribution(mint);
-        if (!holders.safe) {
-            log(`   ❌ REJECT: ${holders.reason}`);
-            return null;
-        }
-        log(`   ✅ PASS: Holder Distribution Safe (${holders.top1.toFixed(1)}%)`);
+        if (!holders.safe) { log(`   ❌ REJECT: ${holders.reason}`); return null; }
 
-        return {
-            verdict: "SEND_ALERT",
-            details: {
-                warmthScore: warm.score,
-                walletAge: warm.details.ageDays,
-                holderTop1: holders.top1
-            }
-        };
+        return { score: warm.score, age: warm.age, top1: holders.top1 };
     } catch (e) { return null; }
 }
 
-// ==================== RADAR & DETECTION ====================
+// ==================== RADAR (GRADUATED TARGETING) ====================
 
 function startRadar() {
     const ws = new WebSocket('wss://pumpportal.fun/api/data');
     
     ws.on('open', () => {
-        log('📡 WebSocket Connected - High Visibility Mode');
-        ws.send(JSON.stringify({ "method": "subscribeNewToken" })); 
+        log('📡 WebSocket Connected - High Safety Mode (Graduates Only)');
         ws.send(JSON.stringify({ "method": "subscribeTokenTrade" })); 
     });
 
@@ -125,31 +116,24 @@ function startRadar() {
             const event = JSON.parse(data.toString());
             if (!event.mint || alertedMints.has(event.mint)) return;
 
-            // Log traffic for user visibility
-            if (event.marketCapSol) {
-                console.log(`🔹 [STREAM]: ${event.name || '???'} | ${event.marketCapSol.toFixed(2)} SOL`);
-            }
-
-            // Detection Trigger (10 SOL to 100 SOL)
-            if (event.marketCapSol >= 10 && event.marketCapSol <= 100) {
+            // Target ONLY tokens near or at graduation (75 SOL to 100 SOL)
+            if (event.marketCapSol >= 75 && event.marketCapSol <= 100) {
                 alertedMints.add(event.mint);
-                log(`🎯 TARGET DETECTED: ${event.name} hits ${event.marketCapSol.toFixed(1)} SOL`);
+                log(`🎯 GRADUATE CANDIDATE: ${event.name} (${event.marketCapSol.toFixed(1)} SOL)`);
 
                 setTimeout(async () => {
                     const result = await analyzeToken(event.mint, event.traderPublicKey, event.name || "Unknown");
-                    
-                    if (result && result.verdict === "SEND_ALERT") {
-                        const report = `🌟 **ELITE TOKEN VERIFIED** 🌟\n\n` +
+                    if (result) {
+                        const report = `🎓 **ELITE GRADUATED TOKEN** 🛡️\n\n` +
                                        `🏷️ **Name:** ${event.name}\n` +
-                                       `👴 **Dev Age:** ${result.details.walletAge} days\n` +
-                                       `🔥 **Warmth:** ${result.details.warmthScore.toFixed(0)}/100\n` +
-                                       `👥 **Top Whale:** ${result.details.holderTop1.toFixed(1)}%\n\n` +
+                                       `👴 **Dev Age:** ${result.age} days\n` +
+                                       `👥 **Top Whale:** ${result.top1.toFixed(1)}%\n` +
+                                       `✅ **Safety:** All Authorities Revoked\n\n` +
                                        `🔗 [DexScreener](https://dexscreener.com/solana/${event.mint})`;
-
                         await bot.sendMessage(TELEGRAM_CHAT_ID, report, { parse_mode: 'Markdown' });
                         log(`🚀 ALERT SENT: ${event.name}`);
                     }
-                }, 10000); // 10s wait for indexing
+                }, 15000); 
             }
         } catch (e) {}
     });
@@ -157,7 +141,4 @@ function startRadar() {
     ws.on('close', () => setTimeout(startRadar, 3000));
 }
 
-// Startup
-console.clear();
-log('💎 ELITE SCANNER v5.0 STARTING...');
 startRadar();
