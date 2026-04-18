@@ -156,11 +156,21 @@ async function monitorPumpFun() {
 
     while (true) {
         try {
-            // Pump.Fun API endpoint for latest tokens
+                        // Pump.Fun API endpoint for latest tokens (UPDATED)
             const response = await axios.get(
-                'https://api.pump.fun/api/v1/tokens?limit=100&offset=0&sort=newest',
-                { timeout: 10000 }
+                'https://frontend-api.pump.fun/coins/latest',
+                { 
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                        'Accept': 'application/json',
+                        'Accept-Encoding': 'gzip, deflate, br',
+                        'Origin': 'https://pump.fun',
+                        'Referer': 'https://pump.fun/'
+                    },
+                    timeout: 10000 
+                }
             );
+            
 
             const tokens = response.data?.tokens || response.data || [];
 
