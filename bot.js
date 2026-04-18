@@ -197,30 +197,7 @@ function monitorPumpFun() {
     });
 }
 
-                alertedMints.add(mint);
-
-                log(`\n🎯 NEW TOKEN: ${name}`);
-                log(`   Mint: ${mint}`);
-                log(`   Dev: ${creator?.slice(0, 10) || 'unknown'}...`);
-
-                if (!creator) {
-                    reject(`No creator address`);
-                    rejectedCounter++;
-                    continue;
-                }
-
-                const walletCheck = await checkWarmWallet(creator);
-
-                if (walletCheck.warm) {
-                    log(`\n🚀 REAL DEV! SENDING ALERT!\n`);
-                    passedCounter++;
-                    await sendAlert(mint, name, walletCheck);
-                } else {
-                    rejectedCounter++;
-                }
-
-                await new Promise(r => setTimeout(r, 500));
-            }
+                
 
             // Statistics every check
             log(`\n📊 CHECK STATS:`);
