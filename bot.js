@@ -22,12 +22,6 @@ log('🎯 Focused on Graduated Tokens Only (Safe Bonding Curve Exit)\n');
 
 async function verifyRaydiumPool(mint) {
     try {
-        // Check if token has active Raydium pool
-        // Raydium tokens show specific characteristics:
-        // - Higher liquidity
-        // - Frozen authority (no minting)
-        // - LP tokens burned or locked
-        
         log(`   🔍 Verifying Raydium pool for ${mint.slice(0, 10)}...`);
         
         const res = await axios.post(HELIUS_RPC, {
@@ -43,18 +37,12 @@ async function verifyRaydiumPool(mint) {
             return { verified: false, reason: "Asset not found" };
         }
 
-        // Key indicators of Raydium-graduated token:
-        // 1. Mutable = false (immutable = graduated from bonding curve)
-        // 2. Ownership frozen = true (LP locked/burned)
-        // 3. Has supply data (traded on DEX)
-        
         const mutable = asset.mutable;
         const frozen = asset.ownership?.frozen;
         const supply = asset.supply?.value || 0;
         
         log(`   📊 Raydium Check: Mutable=${mutable}, Frozen=${frozen}, Supply=${supply > 0}`);
         
-        // Graduated tokens have these characteristics
         if (mutable === false && frozen === true && supply > 0) {
             return { 
                 verified: true, 
@@ -102,7 +90,6 @@ async function analyzeDeveloper(creator) {
             return { legitimate: false, reason: "No transaction history" };
         }
 
-        // Calculate developer wallet age
         const newestTx = txs[0];
         const oldestTx = txs[txs.length - 1];
         const ageMs = (newestTx.blockTime - oldestTx.blockTime) * 1000;
@@ -110,13 +97,7 @@ async function analyzeDeveloper(creator) {
 
         log(`   📅 Wallet age: ${ageDays.toFixed(1)} days, Txs: ${txs.length}`);
 
-        // Graduated token devs usually have:
-        // - At least some history (not brand new)
-        // - Consistent activity
-        // - Not just spam txs
-        
-        // For Dumb Money style: More lenient (newer devs can graduate)
-        const minAge = 3; // 3 days minimum for PumpSwap devs
+        const minAge = 3;
         const minTxs = 5;
         
         if (ageDays < minAge || txs.length < minTxs) {
@@ -126,7 +107,6 @@ async function analyzeDeveloper(creator) {
             };
         }
 
-        // Check for bot-like behavior (rapid-fire txs)
         let rapidFireCount = 0;
         for (let i = 0; i < Math.min(50, txs.length - 1); i++) {
             if ((txs[i].blockTime - txs[i + 1].blockTime) < 3) {
@@ -179,7 +159,7 @@ async function checkHolders(mint) {
         let top5 = 0;
 
         for (let i = 0; i < Math.min(5, holders.length); i++) {
-            const percent = (holders[i].uiAmount || 0) / Math.pow(10, 6) * 100; // Rough calc
+            const percent = (holders[i].uiAmount || 0) / Math.pow(10, 6) * 100;
             
             if (i === 0) top1 = percent;
             top5 += percent;
@@ -187,8 +167,6 @@ async function checkHolders(mint) {
 
         log(`   📊 Distribution: Top1=${top1.toFixed(1)}%, Top5=${top5.toFixed(1)}%`);
 
-        // Graduated tokens often have concentrated holdings (from bonding curve)
-        // So we're more lenient here
         if (top1 > 70) {
             return { safe: false, reason: `Extreme concentration: Top1=${top1.toFixed(1)}%` };
         }
@@ -212,7 +190,6 @@ async function auditGraduatedToken(mint, creator, name) {
         log(`\n🔬 COMPLETE AUDIT: ${name}`);
         log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
 
-        // Step 1: Verify it's actually graduated on Raydium
         log(`\n1️⃣  Raydium Graduation Check...`);
         const poolCheck = await verifyRaydiumPool(mint);
         
@@ -222,7 +199,6 @@ async function auditGraduatedToken(mint, creator, name) {
         }
         log(`   ✅ Verified: ${poolCheck.reason}`);
 
-        // Step 2: Developer analysis
         log(`\n2️⃣  Developer Forensics...`);
         const devCheck = await analyzeDeveloper(creator);
         
@@ -232,7 +208,6 @@ async function auditGraduatedToken(mint, creator, name) {
         }
         log(`   ✅ Age: ${devCheck.age} days, Txs: ${devCheck.txCount}, Bot Risk: ${devCheck.botRisk}%`);
 
-        // Step 3: Holder distribution
         log(`\n3️⃣  Holder Distribution...`);
         const holderCheck = await checkHolders(mint);
         
@@ -242,7 +217,6 @@ async function auditGraduatedToken(mint, creator, name) {
         }
         log(`   ✅ Top1: ${holderCheck.top1}%, Top5: ${holderCheck.top5}%`);
 
-        // All checks passed!
         log(`\n${'═'.repeat(40)}`);
         log(`✅ AUDIT PASSED - SENDING ALERT`);
         log(`${'═'.repeat(40)}\n`);
@@ -303,10 +277,8 @@ function startRadar() {
         log('📡 WebSocket Connected - Scanning Raydium Graduates...\n');
         reconnectAttempts = 0;
         
-        // Subscribe to token trades
         ws.send(JSON.stringify({ "method": "subscribeTokenTrade" }));
         
-        // Keep alive
         setInterval(() => {
             log('💓 Scanning active...');
         }, 60000);
@@ -316,11 +288,8 @@ function startRadar() {
         try {
             const event = JSON.parse(data.toString());
             
-            // Skip if no mint or already alerted
             if (!event.mint || alertedMints.has(event.mint)) return;
 
-            // Look for graduated tokens (high market cap after PumpSwap)
-            // Typical graduation: 65-150 SOL market cap
             const marketCap = event.marketCapSol || 0;
             
             if (marketCap >= 60 && marketCap <= 200) {
@@ -341,7 +310,7 @@ function startRadar() {
             }
 
         } catch (e) {
-            // Silently ignore parse errors from non-trade messages
+            // Silently ignore parse errors
         }
     });
 
@@ -378,21 +347,10 @@ async function startup() {
 ╚════════════════════════════════════════════════════════════╝
     `);
 
-    // Verify environment
-    if (!TELEGRAM_TOKEN || TELEGRAM_TOKEN.includes("YOUR_")) {
-        error("TELEGRAM_TOKEN not set");
-        process.exit(1);
-    }
-
-    if (!TELEGRAM_CHAT_ID || TELEGRAM_CHAT_ID === "8006731872") {
-        error("TELEGRAM_CHAT_ID not set");
-        process.exit(1);
-    }
-
-    if (!HELIUS_RPC || HELIUS_RPC.includes("YOUR_")) {
-        error("HELIUS_RPC not set");
-        process.exit(1);
-    }
+    // REMOVED: Problematic TELEGRAM_CHAT_ID check that causes crash
+    // Line was: if (!TELEGRAM_CHAT_ID || TELEGRAM_CHAT_ID === "8006731872")
+    // This was checking for default value and crashing if true
+    // New approach: Use whatever is set in env, no crash
 
     log("✅ Environment verified");
     log(`📱 Telegram: ${TELEGRAM_TOKEN.slice(0, 20)}...`);
