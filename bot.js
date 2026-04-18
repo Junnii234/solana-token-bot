@@ -11,13 +11,12 @@ const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: { autoStart: true } });
 const alertedMints = new Set();
 const HEADERS = { 'Content-Type': 'application/json' };
 
-console.log('📡 V83 ONLINE: Active Graduation Hunter & Trade Streamer...');
+console.log('📡 V84 ONLINE: Heartbeat Active & Radar at 60 SOL...');
 
 async function checkMigrationGem(mint, mcap, chatId = TELEGRAM_CHAT_ID) {
     try {
-        console.log(`🔍 Forensic Check for: ${mint.substring(0,8)}... (MCap: ${mcap.toFixed(1)} SOL)`);
+        console.log(`🔍 Forensic Check: ${mint.substring(0,6)}... (MCap: ${mcap.toFixed(1)} SOL)`);
         
-        // Holder Distribution Check
         const holdersRes = await axios.post(HELIUS_RPC, { 
             jsonrpc: "2.0", id: 1, method: "getTokenLargestAccounts", params: [mint] 
         }, { headers: HEADERS });
@@ -26,11 +25,10 @@ async function checkMigrationGem(mint, mcap, chatId = TELEGRAM_CHAT_ID) {
         if (!holders || holders.length < 5) return;
 
         let top10Sum = 0;
-        // Raydium par jane ke baad Top 10 (excluding Raydium Pool if possible)
         holders.slice(0, 10).forEach(h => top10Sum += (h.uiAmount / 1000000000) * 100);
 
         if (top10Sum > 25) {
-            console.log(`❌ REJECTED: Distribution too heavy (${top10Sum.toFixed(1)}%)`);
+            console.log(`❌ REJECTED: Top 10 too heavy (${top10Sum.toFixed(1)}%)`);
             return;
         }
 
@@ -40,23 +38,26 @@ async function checkMigrationGem(mint, mcap, chatId = TELEGRAM_CHAT_ID) {
 
         if (hasSocials) {
             const name = assetRes.data.result?.content?.metadata?.name || "Unknown";
-            const report = `🎓 **PUMPSWAP / RAYDIUM GEM** 🎓\n\n` +
+            const report = `🎓 **PUMPSWAP RADAR ALERT** 🎓\n\n` +
                            `🏷️ **Name:** ${name}\n` +
-                           `💰 **Market Cap:** ${mcap.toFixed(1)} SOL ✅\n` +
+                           `💰 **Market Cap:** ${mcap.toFixed(1)} SOL 🔥\n` +
                            `👥 **Top 10 Holders:** ${top10Sum.toFixed(1)}% ✅\n\n` +
                            `🔗 [DexScreener](https://dexscreener.com/solana/${mint})`;
             
-            await bot.sendMessage(chatId, report, { parse_mode: 'Markdown' });
+            await bot.sendMessage(chatId, report, { parse_mode: 'Markdown', disable_web_page_preview: true });
             console.log(`✅ ALERT SENT: ${name}`);
+        } else {
+            console.log(`❌ REJECTED: No Socials Found.`);
         }
-    } catch (e) { console.log(`Error: ${e.message}`); }
+    } catch (e) { console.log(`Forensic Error: ${e.message}`); }
 }
 
 function startRadar() {
     const ws = new WebSocket('wss://pumpportal.fun/api/data');
+    let tradeCount = 0; // Trade counter for heartbeat
     
     ws.on('open', () => {
-        console.log('✅ WebSocket Connected - Streaming Trades...');
+        console.log('✅ WebSocket Connected - Firehose Active!');
         ws.send(JSON.stringify({ "method": "subscribeTokenTrade" }));
     });
 
@@ -64,22 +65,39 @@ function startRadar() {
         try {
             const event = JSON.parse(data.toString());
             
-            // Logs mein har trade dikhayega taake tasalli rahe ke bot chal raha hai
             if (event.mint) {
-                // Graduation ki dehleez (78 SOL se upar)
-                if (event.marketCapSol >= 78 && !alertedMints.has(event.mint)) {
+                tradeCount++;
+                
+                // 💓 HAR 50 TRADES KE BAAD LOG AAYEGA TAASALLI KE LIYE
+                if (tradeCount % 50 === 0) {
+                    console.log(`💓 [Heartbeat] Bot is awake. Scanned ${tradeCount} trades so far...`);
+                }
+
+                // 🛑 LIMIT DROPPED TO 60 SOL
+                if (event.marketCapSol >= 60 && !alertedMints.has(event.mint)) {
                     alertedMints.add(event.mint);
-                    console.log(`🔥 GRADUATION DETECTED: ${event.mint.substring(0,8)}...`);
-                    setTimeout(() => checkMigrationGem(event.mint, event.marketCapSol), 10000);
+                    console.log(`🔥 HIGH POTENTIAL DETECTED: ${event.mint.substring(0,6)}... (${event.marketCapSol.toFixed(1)} SOL)`);
+                    setTimeout(() => checkMigrationGem(event.mint, event.marketCapSol), 5000);
                 }
             }
         } catch (e) {}
     });
 
-    ws.on('error', (err) => console.log('WebSocket Error:', err.message));
+    // Ping/Pong logic to prevent silent drops
+    const pingInterval = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+            ws.ping();
+        }
+    }, 30000);
+
     ws.on('close', () => {
-        console.log('🔄 Connection closed. Reconnecting...');
+        clearInterval(pingInterval);
+        console.log('🔄 WebSocket Disconnected. Reconnecting in 3 seconds...');
         setTimeout(startRadar, 3000);
+    });
+
+    ws.on('error', (err) => {
+        console.log(`⚠️ WebSocket Error: ${err.message}`);
     });
 }
 
