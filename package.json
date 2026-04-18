@@ -1,11 +1,11 @@
 {
-  "name": "elite-solana-scanner",
+  "name": "bot",
   "version": "4.0.0",
   "description": "Elite Solana Token Scanner with Warm Wallet Detection",
-  "main": "elite_scanner_production.js",
+  "main": "bot.js",
   "scripts": {
-    "start": "node elite_scanner_production.js",
-    "dev": "node elite_scanner_production.js",
+    "start": "node bot.js",
+    "dev": "node bot.js",
     "test": "node -e \"console.log('All dependencies installed correctly')\""
   },
   "keywords": [
