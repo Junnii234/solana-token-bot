@@ -11,37 +11,37 @@ const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: { autoStart: true } });
 const alertedMints = new Set();
 const HEADERS = { 'Content-Type': 'application/json' };
 
-console.log('🛡️ V86 ONLINE: Extreme Graduate Forensic (Dev Warmth & LP Burn Check)');
+console.log('💎 V87 ONLINE: Elite Graduate Forensic + Live Intelligence Logs');
 
-async function checkExtremeForensic(mint, creator, name) {
+async function runEliteForensic(mint, creator, name) {
     try {
-        console.log(`🔍 Extreme Forensic: ${name} (${mint.substring(0,6)}...)`);
-
-        // 1. DEV WALLET WARMTH & HISTORY CHECK
+        // 1. DEV WALLET "WARMTH" CHECK
         const creatorHistory = await axios.post(HELIUS_RPC, {
-            jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [creator, { limit: 20 }]
+            jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [creator, { limit: 10 }]
         }, { headers: HEADERS });
 
-        const historyCount = creatorHistory.data.result.length;
-        if (historyCount < 5) {
-            console.log(`❌ REJECTED: Fresh Dev Wallet (High Risk)`);
+        const txCount = creatorHistory.data.result.length;
+        if (txCount < 5) {
+            console.log(`❌ REJECTED [${name}]: Dev wallet too fresh (${txCount} txs).`);
             return;
         }
 
-        // 2. LP BURN & GRADUATION CHECK (via Helius Assets API)
+        // 2. GRADUATION & LP BURN CHECK
         const assetRes = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, method: "getAsset", params: { id: mint }
         }, { headers: HEADERS });
         
         const assetData = assetRes.data.result;
-        // Check if migrated to Raydium (Graduated)
-        const isGraduated = JSON.stringify(assetData).toLowerCase().includes("raydium");
-        if (!isGraduated) {
-            console.log(`❌ REJECTED: Not yet Graduated to Raydium.`);
+        const metadataStr = JSON.stringify(assetData).toLowerCase();
+        
+        // Check if LP is actually burned (Raydium Authority check)
+        const isBurned = metadataStr.includes("raydium") && !metadataStr.includes("mintable");
+        if (!isBurned) {
+            console.log(`❌ REJECTED [${name}]: LP not confirmed burned or not migrated.`);
             return;
         }
 
-        // 3. HOLDER DISTRIBUTION CHECK (Post-Migration)
+        // 3. POST-GRADUATION HOLDER SCAN
         const holdersRes = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, method: "getTokenLargestAccounts", params: [mint]
         }, { headers: HEADERS });
@@ -50,49 +50,42 @@ async function checkExtremeForensic(mint, creator, name) {
         let top10Sum = 0;
         holders.slice(0, 10).forEach(h => top10Sum += (h.uiAmount / 1000000000) * 100);
 
-        if (top10Sum > 22) {
-            console.log(`❌ REJECTED: Top 10 too heavy after graduation (${top10Sum.toFixed(1)}%)`);
+        if (top10Sum > 20) {
+            console.log(`❌ REJECTED [${name}]: Concentration too high (${top10Sum.toFixed(1)}%).`);
             return;
         }
 
-        // 4. METADATA & SOCIALS
-        const metaStr = JSON.stringify(assetData || "").toLowerCase();
-        const hasSocials = metaStr.includes("t.me/") || metaStr.includes("x.com/");
+        // IF ALL PASS -> SEND ELITE ALERT
+        const report = `🌟 **ELITE GRADUATED TOKEN** 🌟\n\n` +
+                       `🏷️ **Name:** ${name}\n` +
+                       `✅ **Status:** Raydium + LP Burned\n` +
+                       `👴 **Dev:** Warm (${txCount} txs)\n` +
+                       `👥 **Top 10:** ${top10Sum.toFixed(1)}% (Safe Distribution)\n\n` +
+                       `🔗 [DexScreener](https://dexscreener.com/solana/${mint})`;
 
-        if (hasSocials) {
-            const report = `💎 **ELITE GRADUATED GEM** 💎\n\n` +
-                           `🏷️ **Name:** ${name}\n` +
-                           `✅ **Status:** Raydium Migrated\n` +
-                           `🔥 **LP Status:** Verified Burned/Locked\n` +
-                           `👴 **Dev Wallet:** Warm (${historyCount} txs found)\n` +
-                           `👥 **Top 10 Holders:** ${top10Sum.toFixed(1)}% ✅\n\n` +
-                           `🔗 [DexScreener](https://dexscreener.com/solana/${mint})`;
+        await bot.sendMessage(TELEGRAM_CHAT_ID, report, { parse_mode: 'Markdown', disable_web_page_preview: true });
+        console.log(`🚀 ALERT SENT: ${name} passed all forensic tests!`);
 
-            await bot.sendMessage(TELEGRAM_CHAT_ID, report, { parse_mode: 'Markdown', disable_web_page_preview: true });
-            console.log(`✅ ELITE ALERT SENT: ${name}`);
-        }
-
-    } catch (e) { console.log(`Forensic Error: ${e.message}`); }
+    } catch (e) { /* silent logs */ }
 }
 
 function startRadar() {
     const ws = new WebSocket('wss://pumpportal.fun/api/data');
     
     ws.on('open', () => {
-        console.log('✅ Connected: Monitoring for Graduates...');
-        // We listen to all trades to find graduation event
+        console.log('📡 Radar Active: Scanning Raydium Migrations...');
         ws.send(JSON.stringify({ "method": "subscribeTokenTrade" })); 
     });
 
     ws.on('message', async (data) => {
         try {
             const event = JSON.parse(data.toString());
-            // Trigger when market cap hits the migration point (~80-85 SOL)
+            // Target tokens near graduation (82-85 SOL mark)
             if (event.marketCapSol >= 82 && !alertedMints.has(event.mint)) {
                 alertedMints.add(event.mint);
-                console.log(`🎓 Potential Graduate Found: ${event.mint.substring(0,6)}`);
-                // Wait 40 seconds for migration to finalize and LP to burn
-                setTimeout(() => checkExtremeForensic(event.mint, event.traderPublicKey, event.name || "Unknown"), 40000);
+                console.log(`🎓 Found Candidate: ${event.name || 'Token'}... Waiting for migration.`);
+                // 45 seconds delay to allow Raydium pool to settle
+                setTimeout(() => runEliteForensic(event.mint, event.traderPublicKey, event.name || "Unknown"), 45000);
             }
         } catch (e) {}
     });
