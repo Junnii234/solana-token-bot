@@ -121,7 +121,7 @@ function startRadar() {
             const mcap = event.marketCapSol || 0;
 
             // --- 🟢 LIVE PROGRESS LOG (Ab screen silent nahi hogi) ---
-            if (mcap >= 40 && mcap < 65) {
+            if (mcap >= 550 && mcap < 600) {
                 const now = Date.now();
                 if (now - (lastLogTime.get(event.mint) || 0) > 15000) {
                     log(`📈 PROGRESS: ${event.name} is climbing (${mcap.toFixed(1)} SOL)`);
@@ -129,8 +129,8 @@ function startRadar() {
                 }
             }
 
-            // --- 🎯 FINAL TARGET: 65 SOL (PumpSwap Graduation Zone) ---
-            if (mcap >= 65 && !alertedMints.has(event.mint)) {
+            // --- 🎯 FINAL TARGET: 600 SOL (PumpSwap Graduation Zone) ---
+            if (mcap >= 600 && !alertedMints.has(event.mint)) {
                 alertedMints.add(event.mint);
                 log(`🔥 TARGET REACHED: ${event.name} hit 65 SOL! Analyzing...`);
 
