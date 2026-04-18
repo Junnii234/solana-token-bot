@@ -15,11 +15,10 @@ const HEADERS = { 'Content-Type': 'application/json' };
 const log = (msg) => console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
 const error = (msg) => console.error(`[${new Date().toLocaleTimeString()}] ❌ ${msg}`);
 
-log('🚀 V9.0 PUMPSWAP DEX TRACKER - FORENSICS UNCHANGED');
-log('🎯 Market Cap Range: 10-500 SOL (PumpSwap)\n');
+log('🚀 V9.1 PUMPSWAP DEX TRACKER - RADAR RESTORED');
+log('🎯 Market Cap Range: 10-500 SOL & Migrations\n');
 
 // ==================== RAYDIUM POOL VERIFICATION ====================
-// ☝️ SAME AS V8.2 - NO CHANGES
 
 async function verifyRaydiumPool(mint) {
     try {
@@ -45,23 +44,11 @@ async function verifyRaydiumPool(mint) {
         log(`   📊 Raydium Check: Mutable=${mutable}, Frozen=${frozen}, Supply=${supply > 0}`);
         
         if (mutable === false && frozen === true && supply > 0) {
-            return { 
-                verified: true, 
-                reason: "Raydium graduated token",
-                mutable,
-                frozen,
-                supply
-            };
+            return { verified: true, reason: "Raydium graduated token", mutable, frozen, supply };
         }
         
         if (mutable === false) {
-            return { 
-                verified: true, 
-                reason: "Token is immutable (graduated)",
-                mutable,
-                frozen,
-                supply
-            };
+            return { verified: true, reason: "Token is immutable (graduated)", mutable, frozen, supply };
         }
         
         return { verified: false, reason: "Still on bonding curve (not graduated)" };
@@ -73,7 +60,6 @@ async function verifyRaydiumPool(mint) {
 }
 
 // ==================== DEVELOPER FORENSICS ====================
-// ☝️ SAME AS V8.2 - NO CHANGES
 
 async function analyzeDeveloper(creator) {
     try {
@@ -103,10 +89,7 @@ async function analyzeDeveloper(creator) {
         const minTxs = 5;
         
         if (ageDays < minAge || txs.length < minTxs) {
-            return { 
-                legitimate: false, 
-                reason: `Developer too new: ${ageDays.toFixed(1)}d, ${txs.length} txs` 
-            };
+            return { legitimate: false, reason: `Developer too new: ${ageDays.toFixed(1)}d, ${txs.length} txs` };
         }
 
         let rapidFireCount = 0;
@@ -119,18 +102,10 @@ async function analyzeDeveloper(creator) {
         const rapidFirePercent = (rapidFireCount / Math.min(50, txs.length)) * 100;
         
         if (rapidFirePercent > 40) {
-            return { 
-                legitimate: false, 
-                reason: `Bot-like behavior: ${rapidFirePercent.toFixed(0)}% rapid-fire txs` 
-            };
+            return { legitimate: false, reason: `Bot-like behavior: ${rapidFirePercent.toFixed(0)}% rapid-fire txs` };
         }
 
-        return { 
-            legitimate: true,
-            age: ageDays.toFixed(1),
-            txCount: txs.length,
-            botRisk: rapidFirePercent.toFixed(0)
-        };
+        return { legitimate: true, age: ageDays.toFixed(1), txCount: txs.length, botRisk: rapidFirePercent.toFixed(0) };
 
     } catch (e) {
         error(`Developer analysis error: ${e.message}`);
@@ -139,7 +114,6 @@ async function analyzeDeveloper(creator) {
 }
 
 // ==================== HOLDER DISTRIBUTION CHECK ====================
-// ☝️ SAME AS V8.2 - NO CHANGES
 
 async function checkHolders(mint) {
     try {
@@ -163,7 +137,6 @@ async function checkHolders(mint) {
 
         for (let i = 0; i < Math.min(5, holders.length); i++) {
             const percent = (holders[i].uiAmount || 0) / Math.pow(10, 6) * 100;
-            
             if (i === 0) top1 = percent;
             top5 += percent;
         }
@@ -187,7 +160,6 @@ async function checkHolders(mint) {
 }
 
 // ==================== COMPLETE FORENSIC AUDIT ====================
-// ☝️ SAME AS V8.2 - NO CHANGES
 
 async function auditGraduatedToken(mint, creator, name) {
     try {
@@ -227,12 +199,7 @@ async function auditGraduatedToken(mint, creator, name) {
 
         return {
             passed: true,
-            details: {
-                devAge: devCheck.age,
-                txCount: devCheck.txCount,
-                top1: holderCheck.top1,
-                top5: holderCheck.top5
-            }
+            details: { devAge: devCheck.age, txCount: devCheck.txCount, top1: holderCheck.top1, top5: holderCheck.top5 }
         };
 
     } catch (e) {
@@ -242,12 +209,11 @@ async function auditGraduatedToken(mint, creator, name) {
 }
 
 // ==================== TELEGRAM ALERT ====================
-// ☝️ SAME AS V8.2 - NO CHANGES
 
 async function sendAlert(mint, name, auditResult) {
     try {
         const report = 
-            `🌟 **RAYDIUM GRADUATED GEM** 🌟\n\n` +
+            `🌟 **PUMPSWAP / RAYDIUM GEM** 🌟\n\n` +
             `🏷️ **Name:** ${name}\n` +
             `📋 **Mint:** \`${mint}\`\n\n` +
             `✅ **AUDIT PASSED:**\n` +
@@ -256,7 +222,7 @@ async function sendAlert(mint, name, auditResult) {
             `• Top Holder: ${auditResult.details.top1}%\n` +
             `• Top 5 Combined: ${auditResult.details.top5}%\n\n` +
             `🔗 [DexScreener](https://dexscreener.com/solana/${mint})\n` +
-            `🔗 [Solscan](https://solscan.io/token/${mint})`;
+            `🔗 [PumpSwap](https://pumpswap.com/swap?outputCurrency=${mint})`;
 
         await bot.sendMessage(TELEGRAM_CHAT_ID, report, { 
             parse_mode: 'Markdown',
@@ -273,7 +239,6 @@ async function sendAlert(mint, name, auditResult) {
 }
 
 // ==================== WEBSOCKET RADAR ====================
-// ☝️ ONLY CHANGE: Market cap range from 60-200 to 10-500
 
 let tokenCounter = 0;
 
@@ -282,14 +247,19 @@ function startRadar() {
     let reconnectAttempts = 0;
 
     ws.on('open', () => {
-        log('📡 WebSocket Connected - Scanning PumpSwap Tokens...\n');
+        log('📡 WebSocket Connected - Dual Stream Active...\n');
         reconnectAttempts = 0;
         
+        // 🔥 MISSING LINES RESTORED!
+        // 1. Trades (To catch the 10-69 SOL range on the bonding curve)
         ws.send(JSON.stringify({ "method": "subscribeTokenTrade" }));
         
+        // 2. Migrations (To catch the exact moment it hits ~69 SOL and graduates to PumpSwap)
+        ws.send(JSON.stringify({ "method": "subscribeRaydiumMigration" }));
+        
         setInterval(() => {
-            log(`💓 Scanning active... (${tokenCounter} tokens processed)\n`);
-            tokenCounter = 0;
+            log(`💓 Scanning active... (${tokenCounter} events processed)\n`);
+            tokenCounter = 0; // Reset counter after logging
         }, 300000);
     });
 
@@ -299,15 +269,18 @@ function startRadar() {
             
             if (!event.mint || alertedMints.has(event.mint)) return;
 
+            // Counter increment karega har aane walay valid event par
             tokenCounter++;
 
             const marketCap = event.marketCapSol || 0;
+            const isMigration = event.txType === "raydium_migration";
             
-            // ☝️ CHANGED: Range from 60-200 to 10-500 SOL for PumpSwap
-            if (marketCap >= 10 && marketCap <= 500) {
+            // Trigger Condition: Ya to token migrate ho raha ho (Graduation), ya phir apke 10-500 SOL bracket mein ho
+            if (isMigration || (marketCap >= 10 && marketCap <= 500)) {
                 alertedMints.add(event.mint);
                 
-                log(`\n🔥 CANDIDATE: ${event.name} (${marketCap.toFixed(1)} SOL)`);
+                log(`\n🔥 CANDIDATE: ${event.name || event.mint.slice(0,8)}`);
+                log(`   Status: ${isMigration ? 'PumpSwap Graduation 🎓' : `Trading at ${marketCap.toFixed(1)} SOL`}`);
                 log(`   Starting forensic audit...`);
                 
                 const auditResult = await auditGraduatedToken(
@@ -317,7 +290,7 @@ function startRadar() {
                 );
 
                 if (auditResult.passed) {
-                    await sendAlert(event.mint, event.name, auditResult);
+                    await sendAlert(event.mint, event.name || "Pump Gem", auditResult);
                 }
             }
 
@@ -346,16 +319,14 @@ function startRadar() {
 }
 
 // ==================== STARTUP ====================
-// ☝️ SAME AS V8.2 - NO CHANGES
 
 async function startup() {
     console.clear();
     console.log(`
 ╔════════════════════════════════════════════════════════════╗
-║  🚀 V9.0 PUMPSWAP TRACKER                                 ║
-║  🎯 Range: 10-500 SOL (PumpSwap graduated tokens)         ║
-║  ✅ Forensics: 100% Same as V8.2                          ║
-║  ✅ Only market cap range changed!                        ║
+║  🚀 V9.1 PUMPSWAP TRACKER - RADAR RESTORED                ║
+║  🎯 Range: 10-500 SOL & Live PumpSwap Migrations          ║
+║  ✅ Forensics: Fully Strict (V8.2 Standard)               ║
 ╚════════════════════════════════════════════════════════════╝
     `);
 
@@ -364,7 +335,7 @@ async function startup() {
     log(`💬 Chat ID: ${TELEGRAM_CHAT_ID}`);
     log(`🔗 RPC: ${HELIUS_RPC.slice(0, 40)}...\n`);
 
-    log("Starting PumpSwap Monitor...\n");
+    log("Starting Dual-Stream Monitor...\n");
     startRadar();
 }
 
