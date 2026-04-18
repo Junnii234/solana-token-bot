@@ -16,12 +16,15 @@ const seen = new Set();
 
 const HEADERS = { "Content-Type": "application/json" };
 
-// ==================== UTIL ====================
-
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+// ==================== LOGS ====================
 
 const log = (m) => console.log(`[${new Date().toLocaleTimeString()}] ${m}`);
 const reject = (m) => console.log(`⚠️ REJECT: ${m}`);
+const error = (m) => console.log(`❌ ${m}`);
+
+// ==================== UTIL ====================
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // ==================== 1. GRADUATION CHECK ====================
 
@@ -50,8 +53,8 @@ async function isGraduated(mint) {
             if (
                 text.includes("migrate") ||
                 text.includes("raydium") ||
-                text.includes("createpool") ||
-                text.includes("liquidity")
+                text.includes("liquidity") ||
+                text.includes("createpool")
             ) return true;
         }
 
@@ -62,7 +65,7 @@ async function isGraduated(mint) {
     }
 }
 
-// ==================== 2. DEV WALLET ANALYSIS ====================
+// ==================== 2. DEV WALLET (5+ DAYS RULE FIXED) ====================
 
 async function devScore(wallet) {
     try {
@@ -75,126 +78,175 @@ async function devScore(wallet) {
 
         const txs = res.data.result || [];
 
-        const balanceRes = await axios.post(HELIUS_RPC, {
+        if (!txs.length) {
+            return { score: 100, safe: false, ageDays: 0 };
+        }
+
+        const newest = txs[0];
+        const oldest = txs[txs.length - 1];
+
+        const ageDays =
+            ((newest.blockTime - oldest.blockTime) * 1000) /
+            (1000 * 60 * 60 * 24);
+
+        const balRes = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0",
             id: 1,
             method: "getBalance",
             params: [wallet]
         }, { headers: HEADERS });
 
-        const sol = (balanceRes.data.result.value || 0) / 1e9;
+        const sol = (balRes.data.result.value || 0) / 1e9;
 
         let score = 0;
 
-        if (txs.length < 20) score += 30;
+        // 🔥 STRICT RULE: 5 DAYS MINIMUM
+        if (ageDays < 5) score += 60;
+        else if (ageDays < 30) score += 25;
+        else if (ageDays < 90) score += 10;
+
         if (sol < 1) score += 30;
-        if (txs.length > 200) score += 10; // bot-like activity
+        else if (sol < 5) score += 15;
 
-        const safe = score < 50;
+        if (txs.length < 20) score += 20;
 
-        return { score, safe, sol, txCount: txs.length };
+        const safe = ageDays >= 5 && score < 50;
+
+        return {
+            score,
+            safe,
+            sol,
+            txCount: txs.length,
+            ageDays: ageDays.toFixed(2)
+        };
 
     } catch {
-        return { score: 100, safe: false };
+        return { score: 100, safe: false, ageDays: 0 };
     }
 }
 
-// ==================== 3. AUTHORITY CHECK ====================
+// ==================== 3. AUTHORITY CHECK (REAL SETAUTHORITY PARSER) ====================
 
-async function checkAuthority(mint) {
+async function checkAuthority(mintAddress) {
     try {
         const res = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0",
             id: 1,
-            method: "getAccountInfo",
-            params: [mint, { encoding: "jsonParsed" }]
+            method: "getSignaturesForAddress",
+            params: [mintAddress, { limit: 50 }]
         }, { headers: HEADERS });
 
-        const info = res.data.result?.value?.data?.parsed?.info;
+        const signatures = res.data.result || [];
 
-        if (!info) return false;
+        let mintRevoked = false;
+        let freezeRevoked = false;
 
-        return !(info.mintAuthority || info.freezeAuthority);
+        for (let sig of signatures) {
+
+            const txRes = await axios.post(HELIUS_RPC, {
+                jsonrpc: "2.0",
+                id: 1,
+                method: "getTransaction",
+                params: [sig.signature, { maxSupportedTransactionVersion: 0 }]
+            }, { headers: HEADERS });
+
+            const logs = txRes.data?.result?.meta?.logMessages || [];
+            const text = logs.join(" ").toLowerCase();
+
+            if (text.includes("setauthority")) {
+
+                if (
+                    text.includes("minttokens") &&
+                    (text.includes("none") || text.includes("null"))
+                ) {
+                    mintRevoked = true;
+                }
+
+                if (
+                    text.includes("freezeaccount") &&
+                    (text.includes("none") || text.includes("null"))
+                ) {
+                    freezeRevoked = true;
+                }
+            }
+        }
+
+        return {
+            revoked: mintRevoked && freezeRevoked,
+            mintRevoked,
+            freezeRevoked
+        };
 
     } catch {
-        return false;
+        return { revoked: false };
     }
 }
 
-// ==================== 4. SIMULATED TOKEN METRICS ====================
+// ==================== 4. TOKEN SAFETY ====================
 
-function tokenSafety(name) {
+function tokenSafe(name) {
     const bad = ["100x", "moon", "pump", "rocket", "inu!!!"];
     return !bad.some(b => name.toLowerCase().includes(b));
 }
 
-// ==================== 5. HOLDER + SUPPLY (SIMULATED SAFE CHECK) ====================
+// ==================== 5. WAIT PHASE ====================
 
-function supplyHolderCheck() {
-    // NOTE: real implementation needs indexer (Helius DAS / Birdeye API)
-    return true;
+async function waitPhase() {
+    log("⏳ WAITING 60 seconds for stabilization...");
+    await sleep(60000);
 }
 
-// ==================== FINAL PIPELINE ====================
+// ==================== MAIN PIPELINE ====================
 
 async function processToken(mint, name, creator) {
 
     log(`🎯 Token detected: ${name}`);
 
     // STEP 1: MUST BE GRADUATED
-    if (!(await isGraduated(mint))) {
-        return;
-    }
+    if (!(await isGraduated(mint))) return;
 
-    log("🚀 Graduated token confirmed");
+    log("🚀 Graduated confirmed");
 
-    // STEP 2: WAIT 60 SECONDS (REAL STABILITY PHASE)
-    log("⏳ WAITING 60 seconds for stabilization...");
-    await sleep(60000);
+    // STEP 2: WAIT
+    await waitPhase();
 
-    // STEP 3: DEV CHECK
+    // STEP 3: DEV CHECK (5+ DAYS ENFORCED)
     const dev = await devScore(creator);
     if (!dev.safe) {
-        reject(`Dev risky score: ${dev.score}`);
+        reject(`Dev unsafe | Age: ${dev.ageDays}d | Score: ${dev.score}`);
         return;
     }
 
-    // STEP 4: TOKEN NAME CHECK
-    if (!tokenSafety(name)) {
+    // STEP 4: NAME CHECK
+    if (!tokenSafe(name)) {
         reject("Bad token name");
         return;
     }
 
-    // STEP 5: AUTHORITY CHECK
-    const authoritySafe = await checkAuthority(mint);
-    if (!authoritySafe) {
-        reject("Authority NOT revoked");
+    // STEP 5: AUTHORITY CHECK (REAL)
+    const auth = await checkAuthority(mint);
+    if (!auth.revoked) {
+        reject("Authorities NOT revoked");
         return;
     }
 
-    // STEP 6: SUPPLY/HOLDERS CHECK
-    if (!supplyHolderCheck()) {
-        reject("Supply/Holders unsafe");
-        return;
-    }
-
-    // ✅ FINAL PASS
+    // FINAL ALERT
     const msg =
         `🚀 SAFE POST-GRADUATION TOKEN\n\n` +
         `🏷️ ${name}\n` +
         `📌 ${mint}\n\n` +
-        `🧠 Dev Score: ${dev.score}\n` +
+        `🧠 Dev Age: ${dev.ageDays} days\n` +
         `💰 Dev SOL: ${dev.sol.toFixed(2)}\n` +
         `📊 TX: ${dev.txCount}\n\n` +
-        `🔥 ALL 5 PHASES PASSED\n` +
+        `🔥 ALL CHECKS PASSED\n` +
         `https://dexscreener.com/solana/${mint}`;
 
     await bot.sendMessage(TELEGRAM_CHAT_ID, msg);
 
-    log("📤 ALERT SENT (ALL CHECKS PASSED)");
+    log("📤 ALERT SENT");
 }
 
-// ==================== WS LISTENER ====================
+// ==================== WS ====================
 
 function start() {
     log("🚀 Bot starting...");
