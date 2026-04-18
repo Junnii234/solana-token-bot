@@ -146,53 +146,56 @@ async function sendAlert(mint, name, metrics) {
 
 // ==================== PUMP.FUN API MONITORING ====================
 
-async function monitorPumpFun() {
-    let lastCheck = 0;
-    let tokenCounter = 0;
-    let passedCounter = 0;
-    let rejectedCounter = 0;
+// ==================== PUMP.FUN WEBSOCKET MONITORING ====================
+const WebSocket = require('ws');
 
-    log('📡 Starting Pump.Fun API Monitor\n');
+function monitorPumpFun() {
+    log('🛡️ Connecting to PumpPortal WebSocket...');
+    
+    // bot (7).js se liya gaya method
+    const ws = new WebSocket('wss://pumpportal.fun/api/data');
 
-    while (true) {
+    ws.on('open', () => {
+        log('✅ Connected! Monitoring new tokens...');
+        ws.send(JSON.stringify({ "method": "subscribeNewToken" }));
+    });
+
+    ws.on('message', async (data) => {
         try {
-                        // Pump.Fun API endpoint for latest tokens (UPDATED)
-            const response = await axios.get(
-                'https://frontend-api.pump.fun/coins/latest',
-                { 
-                    headers: {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                        'Accept': 'application/json',
-                        'Accept-Encoding': 'gzip, deflate, br',
-                        'Origin': 'https://pump.fun',
-                        'Referer': 'https://pump.fun/'
-                    },
-                    timeout: 10000 
-                }
-            );
-            
+            const event = JSON.parse(data.toString());
+            const mint = event.mint;
+            const creator = event.traderPublicKey; // Dev wallet address
+            const name = event.symbol || 'New Token';
 
-            const tokens = response.data?.tokens || response.data || [];
+            if (!mint || alertedMints.has(mint)) return;
+            alertedMints.add(mint);
 
-            if (!Array.isArray(tokens)) {
-                log(`⚠️ No tokens array in response`);
-                await new Promise(r => setTimeout(r, 5000));
-                continue;
+            log(`\n🎯 NEW TOKEN DETECTED: ${name}`);
+            log(`   Mint: ${mint}`);
+            log(`   Dev: ${creator?.slice(0, 10)}...`);
+
+            // Aapka purana detection logic (Age, Balance, etc.)
+            const walletCheck = await checkWarmWallet(creator);
+
+            if (walletCheck.warm) {
+                log(`🚀 REAL DEV FOUND! SENDING ALERT!`);
+                await sendAlert(mint, name, walletCheck);
             }
 
-            log(`📊 Pump.Fun API: Fetched ${tokens.length} tokens`);
+        } catch (e) {
+            error(`Processing error: ${e.message}`);
+        }
+    });
 
-            for (const token of tokens) {
-                const mint = token.mint || token.address || token.id;
-                if (!mint || alertedMints.has(mint)) continue;
+    ws.on('error', (err) => {
+        error(`WebSocket Error: ${err.message}`);
+    });
 
-                tokenCounter++;
-                const name = token.name || token.symbol || 'Unknown';
-                const creator = token.creator || token.dev || token.deployer;
-
-                if (tokenCounter % 10 === 0) {
-                    log(`📊 Scanning... Token #${tokenCounter}: ${name}`);
-                }
+    ws.on('close', () => {
+        log('⏳ Connection lost. Reconnecting in 5 seconds...');
+        setTimeout(monitorPumpFun, 5000);
+    });
+}
 
                 alertedMints.add(mint);
 
