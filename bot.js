@@ -25,7 +25,7 @@ async function checkWarmWallet(creator) {
         const res = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, 
             method: "getSignaturesForAddress", 
-            params: [creator, { limit: 300 }]
+            params: [creator, { limit: 10000 }]
         }, { headers: HEADERS, timeout: 5000 });
 
         const txs = res.data.result || [];
