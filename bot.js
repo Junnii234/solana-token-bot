@@ -452,7 +452,7 @@ function startRadar() {
                         } else {
                             log(`\n⚠️ Token REJECTED: ${result.failReason}`);
                         }
-                    }, 60000);
+                    }, 5000);
                 }
             }
         } catch (e) {
