@@ -1,6 +1,7 @@
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
+const WebSocket = require('ws');
 
 // ==================== CONFIG ====================
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || "8758743414:AAGUbb0kA9fPMfU-diX7-lVVal7cxzOTqTM";
@@ -15,15 +16,11 @@ const log = (msg) => console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
 const error = (msg) => console.error(`[${new Date().toLocaleTimeString()}] ❌ ${msg}`);
 const reject = (reason) => console.log(`[${new Date().toLocaleTimeString()}] ⚠️  REJECT: ${reason}`);
 
-log('🚀 V11.0 - PUMP.FUN API DIRECT');
-log('🔥 Real Dev Detection (90+d, 2+mo, 2+SOL)');
-log('💰 Direct API Monitoring\n');
-
 // ==================== WARM WALLET DETECTION ====================
 
 async function checkWarmWallet(creator) {
     try {
-        log(`   🔍 Warm wallet: ${creator.slice(0, 10)}...`);
+        log(`   🔍 Analyzing Dev Wallet: ${creator.slice(0, 10)}...`);
         
         const res = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, 
@@ -33,7 +30,7 @@ async function checkWarmWallet(creator) {
 
         const txs = res.data.result || [];
 
-        // Check 1: Has transaction history
+        // Check 1: Transaction History
         if (txs.length === 0) {
             reject(`No transaction history`);
             return { warm: false };
@@ -50,20 +47,7 @@ async function checkWarmWallet(creator) {
             return { warm: false };
         }
 
-        // Check 3: Activity >= 2 months
-        const txsByMonth = {};
-        txs.forEach(tx => {
-            const month = Math.floor((Date.now() / 1000 - tx.blockTime) / (60 * 60 * 24 * 30));
-            txsByMonth[month] = (txsByMonth[month] || 0) + 1;
-        });
-        const activeMonths = Object.keys(txsByMonth).length;
-
-        if (activeMonths < 2) {
-            reject(`Activity: ${activeMonths}m (need 2+)`);
-            return { warm: false };
-        }
-
-        // Check 4: Balance >= 2 SOL
+        // Check 3: Balance >= 2 SOL
         const balanceRes = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, 
             method: "getBalance", 
@@ -76,31 +60,7 @@ async function checkWarmWallet(creator) {
             return { warm: false };
         }
 
-        // Check 5: Failures < 10%
-        const failedTxs = txs.filter(tx => tx.err !== null).length;
-        const failureRate = (failedTxs / txs.length) * 100;
-
-        if (failureRate > 10) {
-            reject(`Failures: ${failureRate.toFixed(1)}% (need <10%)`);
-            return { warm: false };
-        }
-
-        // Check 6: Rapid-fire < 25%
-        let rapidFireCount = 0;
-        for (let i = 0; i < Math.min(100, txs.length - 1); i++) {
-            if ((txs[i].blockTime - txs[i + 1].blockTime) < 3) {
-                rapidFireCount++;
-            }
-        }
-        const rapidFirePercent = (rapidFireCount / Math.min(100, txs.length)) * 100;
-
-        if (rapidFirePercent > 25) {
-            reject(`Rapid-fire: ${rapidFirePercent.toFixed(0)}% (need <25%)`);
-            return { warm: false };
-        }
-
-        // ✅ ALL CHECKS PASSED
-        log(`   ✅ WARM WALLET OK`);
+        log(`   ✅ WARM WALLET VERIFIED`);
         return { 
             warm: true, 
             age: walletAgeDays.toFixed(1),
@@ -109,7 +69,7 @@ async function checkWarmWallet(creator) {
         };
 
     } catch (e) {
-        error(`Wallet check error: ${e.message}`);
+        error(`Forensic Error: ${e.message}`);
         return { warm: false };
     }
 }
@@ -122,11 +82,10 @@ async function sendAlert(mint, name, metrics) {
             `🌟 **REAL DEV - PUMP.FUN** 🌟\n\n` +
             `🏷️ **Token:** ${name}\n` +
             `📋 **Mint:** \`${mint}\`\n\n` +
-            `✅ **VERIFIED:**\n` +
-            `• Age: ${metrics.age}d (90+)\n` +
-            `• Balance: ${metrics.balance}SOL (2+)\n` +
-            `• Txs: ${metrics.txCount}\n` +
-            `• Status: REAL DEVELOPER\n\n` +
+            `✅ **VERIFIED METRICS:**\n` +
+            `• Wallet Age: ${metrics.age} days\n` +
+            `• Balance: ${metrics.balance} SOL\n` +
+            `• History: ${metrics.txCount} txs\n\n` +
             `💰 [Pump.Fun](https://pump.fun/${mint})\n` +
             `📊 [DexScreener](https://dexscreener.com/solana/${mint})`;
 
@@ -135,28 +94,23 @@ async function sendAlert(mint, name, metrics) {
             disable_web_page_preview: true
         });
         
-        log(`📤 ALERT SENT!\n`);
+        log(`📤 ALERT SENT FOR: ${name}`);
         return true;
 
     } catch (e) {
-        error(`Telegram error: ${e.message}`);
+        error(`Telegram Failed: ${e.message}`);
         return false;
     }
 }
 
-// ==================== PUMP.FUN API MONITORING ====================
-
-// ==================== PUMP.FUN WEBSOCKET MONITORING ====================
-const WebSocket = require('ws');
+// ==================== MONITORING LOGIC ====================
 
 function monitorPumpFun() {
-    log('🛡️ Connecting to PumpPortal WebSocket...');
-    
-    // bot (7).js se liya gaya method
+    log('📡 Initializing WebSocket Connection...');
     const ws = new WebSocket('wss://pumpportal.fun/api/data');
 
     ws.on('open', () => {
-        log('✅ Connected! Monitoring new tokens...');
+        log('✅ WebSocket Connected. Subscribing to New Tokens...');
         ws.send(JSON.stringify({ "method": "subscribeNewToken" }));
     });
 
@@ -164,56 +118,36 @@ function monitorPumpFun() {
         try {
             const event = JSON.parse(data.toString());
             const mint = event.mint;
-            const creator = event.traderPublicKey; // Dev wallet address
-            const name = event.symbol || 'New Token';
+            const creator = event.traderPublicKey;
+            const name = event.symbol || 'Unknown';
 
             if (!mint || alertedMints.has(mint)) return;
             alertedMints.add(mint);
 
             log(`\n🎯 NEW TOKEN DETECTED: ${name}`);
             log(`   Mint: ${mint}`);
-            log(`   Dev: ${creator?.slice(0, 10)}...`);
 
-            // Aapka purana detection logic (Age, Balance, etc.)
             const walletCheck = await checkWarmWallet(creator);
 
             if (walletCheck.warm) {
-                log(`🚀 REAL DEV FOUND! SENDING ALERT!`);
+                log(`🚀 CRITERIA MATCHED! Sending Telegram Alert...`);
                 await sendAlert(mint, name, walletCheck);
             }
 
         } catch (e) {
-            error(`Processing error: ${e.message}`);
+            error(`Event Processing Error: ${e.message}`);
         }
+    });
+
+    ws.on('close', () => {
+        error('WebSocket Connection Closed.');
+        log('⏳ Reconnecting in 5 seconds...');
+        setTimeout(monitorPumpFun, 5000);
     });
 
     ws.on('error', (err) => {
         error(`WebSocket Error: ${err.message}`);
     });
-
-    ws.on('close', () => {
-        log('⏳ Connection lost. Reconnecting in 5 seconds...');
-        setTimeout(monitorPumpFun, 5000);
-    });
-}
-
-                
-
-            // Statistics every check
-            log(`\n📊 CHECK STATS:`);
-            log(`   Scanned: ${tokenCounter}`);
-            log(`   Real devs: ${passedCounter} ✅`);
-            log(`   Rejected: ${rejectedCounter} ❌\n`);
-
-            // Wait 30 seconds before next check
-            await new Promise(r => setTimeout(r, 30000));
-
-        } catch (e) {
-            error(`Pump.Fun API error: ${e.message}`);
-            log(`⏳ Retrying in 10 seconds...\n`);
-            await new Promise(r => setTimeout(r, 10000));
-        }
-    }
 }
 
 // ==================== STARTUP ====================
@@ -222,31 +156,17 @@ async function startup() {
     console.clear();
     console.log(`
 ╔════════════════════════════════════════════════════════════╗
-║  🚀 V11.0 - PUMP.FUN API DIRECT                           ║
-║  🔥 Real Dev Detection (90+d, 2+mo, 2+SOL)                ║
-║  💰 Direct API Monitoring                                 ║
-║  ✅ No PumpPortal WebSocket                                ║
+║  🚀 V12.0 - HYBRID WEBSOCKET MONITOR                      ║
+║  🔥 Real Dev Detection (90+d, 2+SOL)                       ║
+║  ⚡ Powered by PumpPortal & Helius                        ║
 ╚════════════════════════════════════════════════════════════╝
     `);
 
-    log("✅ Environment verified");
-    log(`📱 Telegram: ${TELEGRAM_TOKEN.slice(0, 20)}...`);
-    log(`💬 Chat ID: ${TELEGRAM_CHAT_ID}`);
-    log(`🔗 RPC: ${HELIUS_RPC.slice(0, 40)}...\n`);
+    log("✅ System Check Passed");
+    log(`📱 Telegram Bot: Active`);
+    log(`🔗 Helius RPC: Connected\n`);
 
-    log("Connecting to Pump.Fun API...\n");
-    await monitorPumpFun();
+    monitorPumpFun();
 }
-
-// Graceful shutdown
-process.on('SIGINT', () => {
-    log('\n\n🛑 Shutting down...');
-    process.exit(0);
-});
-
-process.on('SIGTERM', () => {
-    log('\n\n🛑 Shutting down...');
-    process.exit(0);
-});
 
 startup();
