@@ -10,71 +10,80 @@ const HELIUS_RPC = process.env.HELIUS_RPC || `https://mainnet.helius-rpc.com/?ap
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
 const alertedMints = new Set();
-const lastProgressLog = new Map();
 const HEADERS = { 'Content-Type': 'application/json' };
 
 const log = (msg) => console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
 
-log('🚀 PUMPSWAP ELITE SCANNER v6.5 - INITIALIZED');
-log('📡 Monitoring PumpSwap Migration & High-Cap Bonding Curves\n');
+log('🚀 PUMPSWAP FINAL v6.7 - SYSTEM ONLINE');
 
-// ==================== 1. FORENSIC ENGINE ====================
+// ==================== FORENSIC WITH AGGRESSIVE RETRY ====================
 
-async function performForensic(mint, creator, name) {
+async function forensicAudit(mint, creator, name, attempt = 1) {
     try {
-        log(`🔍 Forensic Audit Started: ${name}`);
+        log(`🔬 Audit Attempt ${attempt}/5: ${name}`);
         
-        // Fetch Asset Data from Helius
         const res = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, method: "getAsset", params: { id: mint }
         }, { headers: HEADERS });
         
         const asset = res.data.result;
-        if (!asset) return { safe: false, reason: "Asset Not Found" };
+        if (!asset) {
+            if (attempt < 5) {
+                await new Promise(r => setTimeout(r, 10000));
+                return await forensicAudit(mint, creator, name, attempt + 1);
+            }
+            return { success: false, reason: "Asset Not Found" };
+        }
 
-        // A. Metadata & Socials Check (Any 1)
+        // 1. Social Link Check (Crucial for Graduates)
         const metadata = (asset?.content?.metadata_description || "").toLowerCase();
         const links = asset?.content?.links || {};
         const hasSocials = !!links.twitter || !!links.telegram || !!links.website || metadata.includes("http");
-        
-        if (!hasSocials) return { safe: false, reason: "No Social Presence" };
-        log(`   ✅ Socials: Verified`);
 
-        // B. Authority Check (Graduate Status)
-        // PumpSwap graduation par mutable: false hona lazmi hai
-        const isAuthSafe = asset.mutable === false;
-        if (!isAuthSafe) return { safe: false, reason: "Mint Authority Not Revoked" };
-        log(`   ✅ Authority: Revoked/Safe`);
+        // 2. Graduation Confirmation (Mutable: false means it is on DEX)
+        const isGraduated = asset.mutable === false;
 
-        // C. Developer Wallet Age Check
-        const sigRes = await axios.post(HELIUS_RPC, {
-            jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [creator, { limit: 50 }]
-        }, { headers: HEADERS });
-        const txs = sigRes.data.result || [];
-        const age = txs.length > 1 ? ((txs[0].blockTime - txs[txs.length-1].blockTime) * 1000) / (1000 * 60 * 60 * 24) : 0;
-        
-        if (age < 30 && txs.length < 15) return { safe: false, reason: "Developer Too New" };
-        log(`   ✅ Dev Age: ${age.toFixed(1)} days`);
+        if (isGraduated) {
+            // 3. Dev Wallet Age
+            const sigRes = await axios.post(HELIUS_RPC, {
+                jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [creator, { limit: 50 }]
+            }, { headers: HEADERS });
+            const txs = sigRes.data.result || [];
+            const age = txs.length > 1 ? ((txs[0].blockTime - txs[txs.length-1].blockTime) * 1000) / (1000 * 60 * 60 * 24) : 0;
+            
+            // Age criteria: 30 days or highly active dev
+            if (age > 30 || txs.length > 20) {
+                return { success: true, age: age.toFixed(1), socials: hasSocials };
+            }
+            return { success: false, reason: "New Developer" };
+        }
 
-        return { safe: true, age: age.toFixed(1) };
+        // Agar graduate nahi hua ya data missing hai to retry
+        if (attempt < 5) {
+            log(`   ⏳ Data settling for ${name}... Waiting 10s`);
+            await new Promise(r => setTimeout(r, 10000));
+            return await forensicAudit(mint, creator, name, attempt + 1);
+        }
+
+        return { success: false, reason: "Not Graduated/No Socials" };
     } catch (e) {
-        log(`   ⚠️ Forensic Error: ${e.message}`);
-        return { safe: false };
+        log(`   ⚠️ Audit Error: ${e.message}`);
+        return { success: false };
     }
 }
 
-// ==================== 2. RADAR & MIGRATION ENGINE ====================
+// ==================== MONITORING ENGINE ====================
 
 function startRadar() {
     const ws = new WebSocket('wss://pumpportal.fun/api/data');
     
     ws.on('open', () => {
-        log('📡 Connected to PumpPortal WebSocket');
+        log('📡 WebSocket Connected! Hunting for Graduates...');
         ws.send(JSON.stringify({ "method": "subscribeTokenTrade" })); 
     });
 
-    // Activity Heartbeat
-    setInterval(() => log('💓 Scanner Active: Listening for PumpSwap graduates...'), 45000);
+    // Heartbeat to keep Railway active
+    setInterval(() => log('💓 Heartbeat: Scanner is alive and tracking...'), 60000);
 
     ws.on('message', async (data) => {
         try {
@@ -83,43 +92,33 @@ function startRadar() {
 
             const mcap = event.marketCapSol || 0;
 
-            // 🟢 LIVE TRACKING LOG (45 SOL se upar walay coins)
-            if (mcap >= 45 && mcap < 65) {
-                const now = Date.now();
-                if (now - (lastProgressLog.get(event.mint) || 0) > 20000) {
-                    log(`📈 TRACKING: ${event.name} climbing... Current Cap: ${mcap.toFixed(1)} SOL`);
-                    lastProgressLog.set(event.mint, now);
-                }
+            // TRACKING: Har barri trade par log dikhayega
+            if (mcap >= 50 && mcap < 65) {
+                if (Math.random() > 0.98) log(`📈 ON RADAR: ${event.name} is climbing (${mcap.toFixed(1)} SOL)`);
             }
 
-            // 🎯 TRIGGER: PUMPSWAP GRADUATION ZONE (65 SOL+)
-            // Jaise hi Dumb Money wala scenario hit hoga (65+ SOL), analysis trigger hogi
+            // TRIGGER: Jaise hi 65 SOL cross ho (Graduation Zone)
             if (mcap >= 65) {
                 alertedMints.add(event.mint);
-                log(`🔥 TARGET DETECTED: ${event.name} hit ${mcap.toFixed(1)} SOL (PumpSwap Zone)`);
+                log(`🔥 GRADUATION TRIGGER: ${event.name} reached ${mcap.toFixed(1)} SOL!`);
 
-                // 15s Delay: Taake Pumpswap par liquidity migrate ho jaye aur blockchain update ho
-                setTimeout(async () => {
-                    const analysis = await performForensic(event.mint, event.traderPublicKey || event.user, event.name);
-                    
-                    if (analysis.safe) {
-                        const report = `🎓 **ELITE PUMPSWAP GRADUATE** 🛡️\n\n` +
-                                       `🏷️ **Name:** ${event.name}\n` +
-                                       `👴 **Dev Age:** ${analysis.age} days\n` +
-                                       `✅ **Status:** Graduate (PumpSwap)\n\n` +
-                                       `🛒 [Buy on PumpSwap](https://pumpswap.com/swap?outputCurrency=${event.mint})\n` +
-                                       `📊 [DexScreener](https://dexscreener.com/solana/${event.mint})`;
+                const result = await forensicAudit(event.mint, event.traderPublicKey || event.user, event.name);
+                
+                if (result.success) {
+                    const report = `🌟 **ELITE PUMPSWAP GRADUATE** 🛡️\n\n` +
+                                   `🏷️ **Name:** ${event.name}\n` +
+                                   `👴 **Dev Age:** ${result.age} days\n` +
+                                   `✅ **Socials:** ${result.socials ? 'Verified' : 'None'}\n\n` +
+                                   `🛒 [Buy on PumpSwap](https://pumpswap.com/swap?outputCurrency=${event.mint})\n` +
+                                   `📊 [DexScreener](https://dexscreener.com/solana/${event.mint})`;
 
-                        await bot.sendMessage(TELEGRAM_CHAT_ID, report, { parse_mode: 'Markdown' });
-                        log(`🚀 ELITE ALERT SENT: ${event.name}`);
-                    } else {
-                        log(`   ❌ REJECTED: ${analysis.reason}`);
-                    }
-                }, 15000); 
+                    await bot.sendMessage(TELEGRAM_CHAT_ID, report, { parse_mode: 'Markdown' });
+                    log(`🚀 ALERT DISPATCHED: ${event.name}`);
+                } else {
+                    log(`   ❌ REJECT: ${result.reason}`);
+                }
             }
-        } catch (e) {
-            // Silently handle JSON errors
-        }
+        } catch (e) {}
     });
 
     ws.on('close', () => {
@@ -128,5 +127,5 @@ function startRadar() {
     });
 }
 
-// ==================== START ====================
+// Start
 startRadar();
