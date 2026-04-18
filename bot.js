@@ -22,11 +22,12 @@ async function checkWarmWallet(creator) {
     try {
         log(`   🔍 Analyzing Dev Wallet: ${creator.slice(0, 10)}...`);
         
-        const res = await axios.post(HELIUS_RPC, {
-            jsonrpc: "2.0", id: 1, 
-            method: "getSignaturesForAddress", 
-            params: [creator, { limit: 10000 }]
-        }, { headers: HEADERS, timeout: 5000 });
+const res = await axios.post(HELIUS_RPC, {
+    jsonrpc: "2.0", id: 1, 
+    method: "getSignaturesForAddress", 
+    params: [creator, { limit: 1000 }] // Limit ko 300 se barha kar 1000 kar dein
+}, { headers: HEADERS, timeout: 8000 });
+
 
         const txs = res.data.result || [];
 
