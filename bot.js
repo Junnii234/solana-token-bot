@@ -16,11 +16,14 @@ const HEADERS = { 'Content-Type': 'application/json' };
 const log = (msg) => console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
 const error = (msg) => console.error(`[${new Date().toLocaleTimeString()}] ❌ ${msg}`);
 
-// ==================== WARM WALLET VALIDATION ====================
+log('💎 ELITE SCANNER v4.5 - FULL REWRITE');
+log('🔥 Your Original Logic + High-Performance Detection\n');
+
+// ==================== WARM WALLET VALIDATION (ORIGINAL) ====================
 
 async function validateWarmWallet(creator) {
     try {
-        log(`🧪 Testing Wallet Warmth: ${creator.slice(0,8)}...`);
+        log(`🧪 Step 1/5: WARM WALLET VALIDATION [${creator.slice(0,8)}...]`);
         const res = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, 
             method: "getSignaturesForAddress", 
@@ -38,7 +41,7 @@ async function validateWarmWallet(creator) {
 
         const txsLast30Days = txs.filter(tx => (Date.now() / 1000 - tx.blockTime) / (60 * 60 * 24) < 30);
         const dormancyGap = txs.length - txsLast30Days.length;
-        if (dormancyGap > 40 && txsLast30Days.length > 15) return { warm: false, reason: "Dormant/Recycled Scammer", score: 90 };
+        if (dormancyGap > 40 && txsLast30Days.length > 15) return { warm: false, reason: "Recycled Scammer detected", score: 90 };
 
         const balanceRes = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, method: "getBalance", params: [creator]
@@ -46,16 +49,15 @@ async function validateWarmWallet(creator) {
         const balanceSol = (balanceRes.data.result.value || 0) / 1e9;
 
         let warmthScore = Math.min(100, Math.max(0, (100 - walletAgeDays) / 2 + (1 - balanceSol) * 30));
-
         return {
             warm: warmthScore < 35,
             score: warmthScore,
             details: { ageDays: walletAgeDays.toFixed(1), totalTxs: txs.length, balanceSol: balanceSol.toFixed(4) }
         };
-    } catch (e) { return { warm: false, reason: "RPC Error", score: 100 }; }
+    } catch (e) { return { warm: false, reason: "Validation Timeout", score: 100 }; }
 }
 
-// ... [Authority, Supply, Holder checks same as original] ...
+// ==================== AUTHORITY & SUPPLY CHECKS (ORIGINAL) ====================
 
 async function checkAuthorities(mint) {
     try {
@@ -71,80 +73,86 @@ async function checkHolderDistribution(mint) {
         const res = await axios.post(HELIUS_RPC, { jsonrpc: "2.0", id: 1, method: "getTokenLargestAccounts", params: [mint] }, { headers: HEADERS });
         const holders = res.data.result.value || [];
         const top1 = (holders[0].uiAmount / 1000000000) * 100;
-        if (top1 > 50) return { safe: false, reason: `Top holder too heavy: ${top1.toFixed(1)}%` };
+        if (top1 > 50) return { safe: false, reason: `Top whale: ${top1.toFixed(1)}%` };
         return { safe: true, top1 };
     } catch (e) { return { safe: false, reason: "Holder check failed" }; }
 }
 
-// ==================== MAIN ANALYSIS ====================
+// ==================== MAIN ANALYSIS ENGINE ====================
 
 async function analyzeToken(mint, creator, name) {
     try {
-        log(`\n🔍 Forensic Started: ${name} (${mint.slice(0, 8)}...)`);
+        log(`\n🔍 Analyzing Candidate: ${name}`);
         
-        const warmWallet = await validateWarmWallet(creator);
-        if (!warmWallet.warm) {
-            log(`   ❌ REJECT: ${warmWallet.reason} | Score: ${warmWallet.score.toFixed(0)}`);
-            return { verdict: "REJECT" };
-        }
-        log(`   ✅ WARM WALLET PASSED (Score: ${warmWallet.score.toFixed(0)})`);
+        const warm = await validateWarmWallet(creator);
+        if (!warm.warm) { log(`   ❌ REJECT: ${warm.reason}`); return { verdict: "REJECT" }; }
+        log(`   ✅ PASS: Warm Wallet Score ${warm.score.toFixed(0)}`);
 
         const auth = await checkAuthorities(mint);
         if (!auth.safe) { log(`   ❌ REJECT: ${auth.reason}`); return { verdict: "REJECT" }; }
-        log(`   ✅ AUTHORITIES REVOKED`);
+        log(`   ✅ PASS: Authorities Revoked`);
 
         const holders = await checkHolderDistribution(mint);
         if (!holders.safe) { log(`   ❌ REJECT: ${holders.reason}`); return { verdict: "REJECT" }; }
-        log(`   ✅ DISTRIBUTION SAFE (${holders.top1.toFixed(1)}%)`);
+        log(`   ✅ PASS: Holders Safe (${holders.top1.toFixed(1)}%)`);
 
-        return { verdict: "SEND_ALERT", details: { warmthScore: warmWallet.score, walletAge: warmWallet.details.ageDays, holderTop1: holders.top1 } };
-    } catch (e) { log(`   ⚠️ Analysis Error: ${e.message}`); return { verdict: "REJECT" }; }
+        return { verdict: "SEND_ALERT", details: { warmthScore: warm.score, walletAge: warm.details.ageDays, holderTop1: holders.top1 } };
+    } catch (e) { return { verdict: "REJECT" }; }
 }
 
-// ==================== WEBSOCKET RADAR ====================
+// ==================== TELEGRAM ALERT ====================
+
+async function sendTelegramAlert(mint, name, analysis) {
+    try {
+        const report = `🌟 **ELITE VERIFIED TOKEN** 🌟\n\n` +
+                       `🏷️ **Name:** ${name}\n` +
+                       `✅ Dev Warmth: ${analysis.details.warmthScore.toFixed(0)}/100\n` +
+                       `👴 Wallet Age: ${analysis.details.walletAge} days\n` +
+                       `👥 Top Whale: ${analysis.details.holderTop1.toFixed(1)}%\n\n` +
+                       `🔗 [DexScreener](https://dexscreener.com/solana/${mint})`;
+
+        await bot.sendMessage(TELEGRAM_CHAT_ID, report, { parse_mode: 'Markdown' });
+        log(`📤 TELEGRAM ALERT SENT: ${name}`);
+    } catch (e) { error(`Alert Error: ${e.message}`); }
+}
+
+// ==================== UPGRADED RADAR (DETECTION) ====================
 
 function startRadar() {
     const ws = new WebSocket('wss://pumpportal.fun/api/data');
     
     ws.on('open', () => {
-        log('📡 WebSocket Connected - Monitoring Global Stream');
+        log('📡 WebSocket Connected - Detection Engine Active');
+        // V67 Hybrid Method: New Tokens + Trades
+        ws.send(JSON.stringify({ "method": "subscribeNewToken" })); 
         ws.send(JSON.stringify({ "method": "subscribeTokenTrade" })); 
     });
 
     ws.on('message', async (data) => {
         try {
             const event = JSON.parse(data.toString());
-            
-            if (event.mint) {
-                // LIVE TRAFFIC LOG: Her trade par halka sa log taake aapko pata chale bot zinda hai
-                console.log(`🔹 [STREAM]: ${event.name || 'Token'} | ${event.marketCapSol?.toFixed(2)} SOL`);
+            if (!event.mint || alertedMints.has(event.mint)) return;
 
-                if (event.marketCapSol >= 10 && !alertedMints.has(event.mint)) {
-                    alertedMints.add(event.mint);
-                    log(`🎓 CANDIDATE DETECTED: ${event.name} hits 10 SOL+`);
-                    log(`   ⏳ Analyzing in 5 seconds...`);
-                    
-                    setTimeout(async () => {
-                        const result = await analyzeToken(event.mint, event.traderPublicKey, event.name || "Unknown");
-                        if (result.verdict === "SEND_ALERT") {
-                            // Telegram Alert Function Call
-                            const report = `🌟 **ELITE VERIFIED**\nName: ${event.name}\nWarmth: ${result.details.warmthScore.toFixed(0)}\nTop 1: ${result.details.holderTop1.toFixed(1)}%`;
-                            await bot.sendMessage(TELEGRAM_CHAT_ID, report);
-                            log(`🚀 SUCCESS: Alert sent for ${event.name}`);
-                        }
-                    }, 5000);
-                }
+            // Log activity to show bot is alive
+            console.log(`🔹 [TRAFFIC]: ${event.name || 'Unknown'} | MCap: ${event.marketCapSol?.toFixed(2)} SOL`);
+
+            // Target Graduation Window (10-100 SOL)
+            if (event.marketCapSol >= 10 && event.marketCapSol <= 100) {
+                alertedMints.add(event.mint);
+                log(`🎯 CANDIDATE DETECTED: ${event.name} (${event.marketCapSol.toFixed(1)} SOL)`);
+                
+                // 10 second delay for metadata indexing (Modified from 60s for faster logs)
+                setTimeout(async () => {
+                    const result = await analyzeToken(event.mint, event.traderPublicKey, event.name || "Unknown");
+                    if (result.verdict === "SEND_ALERT") {
+                        await sendTelegramAlert(event.mint, event.name, result);
+                    }
+                }, 10000);
             }
         } catch (e) {}
     });
 
-    ws.on('close', () => {
-        log('🔄 WebSocket Disconnected. Reconnecting...');
-        setTimeout(startRadar, 3000);
-    });
+    ws.on('close', () => setTimeout(startRadar, 3000));
 }
 
-// Startup
-console.clear();
-log('💎 ELITE SCANNER v4.1 - LOGS ACTIVE');
 startRadar();
