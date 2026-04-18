@@ -3,98 +3,50 @@ const TelegramBot = require('node-telegram-bot-api');
 const WebSocket = require('ws');
 const axios = require('axios');
 
-// ==================== CONFIG ====================
+// ================= CONFIG =================
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
-const HELIUS_RPC = process.env.HELIUS_RPC;
+const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
-const alertedMints = new Set();
-const HEADERS = { 'Content-Type': 'application/json' };
 
-const log = (msg) => console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
+const seen = new Set();
+const devTracker = {};
 
-// ==================== HELPERS ====================
-const cleanMint = (mint) => mint.replace('pump', '');
+const log = (m) => console.log(`[${new Date().toLocaleTimeString()}] ${m}`);
 
-// ==================== AUDIT ====================
-async function fullAudit(rawMint) {
-    const mint = cleanMint(rawMint);
+const cleanMint = (m) => m.replace('pump', '');
 
+// ================= DEX =================
+async function getDex(mint) {
     try {
-        const res = await axios.post(HELIUS_RPC, {
-            jsonrpc: "2.0",
-            id: 1,
-            method: "getAsset",
-            params: { id: mint }
-        }, { headers: HEADERS, timeout: 8000 });
-
-        const asset = res.data.result;
-
-        // 🔁 Fallback for SPL tokens
-        if (!asset) {
-            return {
-                safe: false,
-                name: "SPL Token",
-                isImmutable: false,
-                noFreeze: false,
-                isCleanDist: false,
-                creator: null
-            };
-        }
-
-        const isImmutable = asset.mutable === false;
-
-        const noFreeze =
-            !asset.authorities?.some(a => a.scopes?.includes('freeze')) &&
-            asset.token_info?.freeze_authority === null;
-
-        const holders = await axios.post(HELIUS_RPC, {
-            jsonrpc: "2.0",
-            id: 1,
-            method: "getTokenLargestAccounts",
-            params: [mint]
-        }, { headers: HEADERS });
-
-        const top1 = parseFloat(holders.data.result?.value?.[0]?.amount || 0);
-        const supply = parseFloat(asset.token_info?.supply || 1);
-
-        const isCleanDist = (top1 / supply) < 0.20;
-
-        return {
-            safe: isImmutable && noFreeze && isCleanDist,
-            name: asset.content?.metadata?.name || "Unknown",
-            isImmutable,
-            noFreeze,
-            isCleanDist,
-            creator: asset.token_info?.mint_authority || null
-        };
-
-    } catch (e) {
-        log("Audit Error: " + e.message);
+        const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mint}`);
+        return res.data.pairs?.[0] || null;
+    } catch {
         return null;
     }
 }
 
-// ==================== DEV AUDIT ====================
+// ================= DEV AUDIT =================
 async function devAudit(address) {
     try {
         if (!address) {
-            return { score: 10, age: "New", sol: "0.00", txCount: 0 };
+            return { score: 0, age: "Unknown", sol: "0.00", txCount: 0, status: "Scammer ❌" };
         }
 
+        const HELIUS = process.env.HELIUS_RPC;
+
         const [bal, txs] = await Promise.all([
-            axios.post(HELIUS_RPC, {
+            axios.post(HELIUS, {
                 jsonrpc: "2.0",
                 id: 1,
                 method: "getBalance",
                 params: [address]
             }),
-            axios.post(HELIUS_RPC, {
+            axios.post(HELIUS, {
                 jsonrpc: "2.0",
                 id: 1,
                 method: "getSignaturesForAddress",
-                params: [address, { limit: 50 }]
+                params: [address, { limit: 100 }]
             })
         ]);
 
@@ -103,118 +55,161 @@ async function devAudit(address) {
         const count = history.length;
 
         let score = 0;
+        let ageDays = 0;
         let ageStr = "Fresh";
 
         if (count > 1) {
             const newest = history[0].blockTime;
             const oldest = history[count - 1].blockTime;
-            const ageDays = (newest - oldest) / 86400;
+            ageDays = (newest - oldest) / 86400;
+            ageStr = ageDays.toFixed(1) + " days";
 
-            ageStr = ageDays.toFixed(2) + " days";
-
-            if (ageDays >= 7) score += 20;
-            if (sol >= 0.2) score += 20;
-            if (count >= 10) score += 20;
+            if (ageDays >= 90) score += 30;
+            else if (ageDays >= 30) score += 20;
+            else if (ageDays >= 7) score += 10;
         }
+
+        if (sol >= 2) score += 25;
+        else if (sol >= 0.5) score += 15;
+        else if (sol >= 0.1) score += 5;
+
+        if (count >= 100) score += 25;
+        else if (count >= 50) score += 15;
+        else if (count >= 10) score += 10;
+
+        let rapidTx = 0;
+        for (let i = 1; i < history.length; i++) {
+            if (history[i - 1].blockTime - history[i].blockTime < 5) {
+                rapidTx++;
+            }
+        }
+
+        const botLike = rapidTx > 20;
+
+        if (!botLike) score += 20;
+        else score -= 10;
+
+        let status = "Scammer ❌";
+        if (score >= 70) status = "Strong Dev 🟢";
+        else if (score >= 40) status = "Decent 🟡";
+        else if (score >= 20) status = "Risky 🟠";
 
         return {
             score,
             age: ageStr,
             sol: sol.toFixed(2),
-            txCount: count
+            txCount: count,
+            status
         };
 
-    } catch (e) {
-        return { score: 0, age: "Error", sol: "0.00", txCount: 0 };
+    } catch {
+        return { score: 0, age: "Error", sol: "0.00", txCount: 0, status: "Error ❌" };
     }
 }
 
-// ==================== TEST COMMAND ====================
-bot.onText(/\/test (.+)/, async (msg, match) => {
-    const rawMint = match[1].trim();
-    const mint = cleanMint(rawMint);
+// ================= DEV TRACK =================
+function trackDev(wallet) {
+    if (!wallet) return 0;
 
-    bot.sendMessage(msg.chat.id, `🧬 Testing: ${mint}`);
+    if (!devTracker[wallet]) {
+        devTracker[wallet] = { count: 0 };
+    }
 
-    const audit = await fullAudit(mint);
-    if (!audit) return bot.sendMessage(msg.chat.id, "❌ RPC Error");
+    devTracker[wallet].count++;
+    return devTracker[wallet].count;
+}
 
-    const dev = await devAudit(audit.creator || mint);
+// ================= SCORE =================
+function scoreToken(dex, devScore, devBuys) {
+    let score = 0;
 
-    const status = (audit.isCleanDist && dev.score >= 20) ? "PASSED ✅" : "FAILED ❌";
+    const liq = dex.liquidity?.usd || 0;
+    const vol = dex.volume?.m5 || 0;
+    const mc = dex.fdv || 0;
 
-    const report =
-`📊 AUDIT
+    if (liq > 5000) score += 25;
+    if (liq > 15000) score += 15;
 
-Token: ${audit.name}
+    if (vol > 2000) score += 20;
+    if (vol > 10000) score += 20;
 
-Security:
-Immutable: ${audit.isImmutable ? '✅' : '❌'}
-No Freeze: ${audit.noFreeze ? '✅' : '❌'}
-Distribution: ${audit.isCleanDist ? '✅' : '❌'}
+    if (mc < 100000) score += 15;
 
-Dev:
-Score: ${dev.score}/100
-Age: ${dev.age}
-Balance: ${dev.sol} SOL
-Txs: ${dev.txCount}
+    if (devScore >= 40) score += 20;
+    if (devScore >= 70) score += 10;
 
-Status: ${status}`;
+    if (devBuys >= 2) score += 10;
+    if (devBuys >= 4) score += 15;
 
-    bot.sendMessage(msg.chat.id, report);
-});
+    return score;
+}
 
-// ==================== RADAR ====================
+// ================= ALERT FORMAT =================
+function formatAlert(dex, mint, score, dev, devBuys) {
+    return `
+🚀 *JUNNI X GEM ALERT*
+
+💎 *${dex.baseToken.name}*
+━━━━━━━━━━━━━━━━━━
+💰 MC: *$${Math.floor(dex.fdv || 0)}*
+💧 Liquidity: *$${Math.floor(dex.liquidity?.usd || 0)}*
+📊 Volume (5m): *$${Math.floor(dex.volume?.m5 || 0)}*
+
+👴 Dev Score: *${dev.score}/100*
+📅 Age: *${dev.age}*
+💼 Balance: *${dev.sol} SOL*
+📈 Txs: *${dev.txCount}*
+🔥 Status: *${dev.status}*
+
+⚡ Dev Buys: *${devBuys}*
+⭐ Score: *${score}/100*
+
+🔗 [View Chart](https://dexscreener.com/solana/${mint})
+`;
+}
+
+// ================= RADAR =================
 function startRadar() {
     const ws = new WebSocket('wss://pumpportal.fun/api/data');
 
     ws.on('open', () => {
-        log('📡 Radar Started...');
+        log("🚀 SNIPER LIVE...");
         ws.send(JSON.stringify({ method: "subscribeTokenTrade" }));
     });
 
     ws.on('message', async (data) => {
         try {
             const event = JSON.parse(data.toString());
-
             if (!event.mint) return;
 
             const mint = cleanMint(event.mint);
+            if (seen.has(mint)) return;
 
-            if (alertedMints.has(mint)) return;
+            const devWallet = event.traderPublicKey || event.user;
+            const devBuys = trackDev(devWallet);
 
-            const mc = event.marketCapSol || 0;
+            const dex = await getDex(mint);
+            if (!dex) return;
 
-            if (mc >= 60) {
-                alertedMints.add(mint);
+            const dev = await devAudit(devWallet);
+            const score = scoreToken(dex, dev.score, devBuys);
 
-                const [audit, dev] = await Promise.all([
-                    fullAudit(mint),
-                    devAudit(event.traderPublicKey || event.user)
-                ]);
+            const liq = dex.liquidity?.usd || 0;
 
-                console.log("Mint:", mint);
-                console.log("Audit:", audit);
-                console.log("Dev:", dev);
+            if (score >= 60 && liq > 5000) {
+                seen.add(mint);
 
-                if (audit && audit.isCleanDist && dev.score >= 20) {
-                    bot.sendMessage(TELEGRAM_CHAT_ID,
-`🚀 GEM
+                const msg = formatAlert(dex, mint, score, dev, devBuys);
 
-${audit.name}
-MC: ${mc.toFixed(1)} SOL
-Score: ${dev.score}/100
-
-https://dexscreener.com/solana/${mint}`);
-                }
+                bot.sendMessage(CHAT_ID, msg, { parse_mode: "Markdown" });
             }
 
-        } catch (e) {}
+        } catch {}
     });
 
     ws.on('close', () => {
         log("Reconnecting...");
-        setTimeout(startRadar, 3000);
+        setTimeout(startRadar, 2000);
     });
 }
 
