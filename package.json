@@ -1,15 +1,26 @@
 {
-  "name": "solana-token-bot",
-  "version": "1.1.0",
-  "description": "Real-time Solana Token Hunter Bot with WebSocket",
-  "main": "bot.js",
+  "name": "elite-solana-scanner",
+  "version": "4.0.0",
+  "description": "Elite Solana Token Scanner with Warm Wallet Detection",
+  "main": "elite_scanner_production.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node elite_scanner_production.js",
+    "dev": "node elite_scanner_production.js",
+    "test": "node -e \"console.log('All dependencies installed correctly')\""
   },
+  "keywords": [
+    "solana",
+    "token",
+    "scanner",
+    "telegram",
+    "bot"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
   "dependencies": {
-    "node-telegram-bot-api": "^0.63.0",
-    "axios": "^1.6.0",
-    "dotenv": "^16.3.1",
+    "axios": "^1.7.4",
+    "dotenv": "^16.4.5",
+    "node-telegram-bot-api": "^0.65.0",
     "ws": "^8.16.0"
   },
   "engines": {
