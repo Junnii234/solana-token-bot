@@ -10,153 +10,123 @@ const HELIUS_RPC = process.env.HELIUS_RPC || `https://mainnet.helius-rpc.com/?ap
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
 const alertedMints = new Set();
-const lastLogTime = new Map();
+const lastProgressLog = new Map();
 const HEADERS = { 'Content-Type': 'application/json' };
 
 const log = (msg) => console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
 
-log('💎 ELITE SCANNER v6.2 - FULL REWRITE');
-log('📡 DEX: PumpSwap & Raydium | Focus: Any Social + 65 SOL Graduation\n');
+log('🚀 PUMPSWAP ELITE SCANNER v6.5 - INITIALIZED');
+log('📡 Monitoring PumpSwap Migration & High-Cap Bonding Curves\n');
 
-// ==================== 1. WARM WALLET CHECK ====================
-async function validateWarmWallet(creator) {
-    try {
-        log(`🧪 Step 1/4: WARM WALLET CHECK...`);
-        const res = await axios.post(HELIUS_RPC, {
-            jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [creator, { limit: 100 }]
-        }, { headers: HEADERS, timeout: 10000 });
-        
-        const txs = res.data.result || [];
-        if (txs.length === 0) return { warm: false };
-        
-        const age = ((txs[0].blockTime - txs[txs.length-1].blockTime) * 1000) / (1000 * 60 * 60 * 24);
-        return { warm: age > 30, age: age.toFixed(1) };
-    } catch (e) { return { warm: false }; }
-}
+// ==================== 1. FORENSIC ENGINE ====================
 
-// ==================== 2. METADATA & SOCIALS (ANY 1) ====================
-async function checkMetadata(mint) {
+async function performForensic(mint, creator, name) {
     try {
-        log(`📝 Step 2/4: SOCIALS & RED FLAGS...`);
+        log(`🔍 Forensic Audit Started: ${name}`);
+        
+        // Fetch Asset Data from Helius
         const res = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, method: "getAsset", params: { id: mint }
         }, { headers: HEADERS });
-
+        
         const asset = res.data.result;
+        if (!asset) return { safe: false, reason: "Asset Not Found" };
+
+        // A. Metadata & Socials Check (Any 1)
         const metadata = (asset?.content?.metadata_description || "").toLowerCase();
         const links = asset?.content?.links || {};
-
-        const hasSocial = !!links.twitter || !!links.telegram || !!links.website || 
-                          metadata.includes("t.me") || metadata.includes("x.com") || metadata.includes("http");
+        const hasSocials = !!links.twitter || !!links.telegram || !!links.website || metadata.includes("http");
         
-        return { safe: hasSocial };
-    } catch (e) { return { safe: false }; }
-}
+        if (!hasSocials) return { safe: false, reason: "No Social Presence" };
+        log(`   ✅ Socials: Verified`);
 
-// ==================== 3. AUTHORITY CHECK ====================
-async function checkAuthorities(mint) {
-    try {
-        log(`🛡️ Step 3/4: AUTHORITY CHECK...`);
-        const res = await axios.post(HELIUS_RPC, { 
-            jsonrpc: "2.0", id: 1, method: "getAsset", params: { id: mint } 
+        // B. Authority Check (Graduate Status)
+        // PumpSwap graduation par mutable: false hona lazmi hai
+        const isAuthSafe = asset.mutable === false;
+        if (!isAuthSafe) return { safe: false, reason: "Mint Authority Not Revoked" };
+        log(`   ✅ Authority: Revoked/Safe`);
+
+        // C. Developer Wallet Age Check
+        const sigRes = await axios.post(HELIUS_RPC, {
+            jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [creator, { limit: 50 }]
         }, { headers: HEADERS });
+        const txs = sigRes.data.result || [];
+        const age = txs.length > 1 ? ((txs[0].blockTime - txs[txs.length-1].blockTime) * 1000) / (1000 * 60 * 60 * 24) : 0;
         
-        const asset = res.data.result;
-        return { safe: asset.mutable === false && asset.ownership?.frozen === true };
-    } catch (e) { return { safe: false }; }
-}
+        if (age < 30 && txs.length < 15) return { safe: false, reason: "Developer Too New" };
+        log(`   ✅ Dev Age: ${age.toFixed(1)} days`);
 
-// ==================== 4. HOLDER CHECK ====================
-async function checkHolderDistribution(mint) {
-    try {
-        log(`👥 Step 4/4: HOLDER CHECK...`);
-        const res = await axios.post(HELIUS_RPC, { 
-            jsonrpc: "2.0", id: 1, method: "getTokenLargestAccounts", params: [mint] 
-        }, { headers: HEADERS });
-        
-        const holders = res.data.result?.value;
-        if (holders && holders.length > 0) {
-            const top1 = (holders[0].uiAmount / 1000000000) * 100;
-            return { safe: top1 <= 50, top1 };
-        }
+        return { safe: true, age: age.toFixed(1) };
+    } catch (e) {
+        log(`   ⚠️ Forensic Error: ${e.message}`);
         return { safe: false };
-    } catch (e) { return { safe: false }; }
+    }
 }
 
-// ==================== MAIN ANALYSIS ====================
-async function analyzeToken(mint, creator, name) {
-    log(`🔍 Forensic Analysis: ${name}`);
-    
-    const meta = await checkMetadata(mint);
-    if (!meta.safe) { log(`   ❌ REJECT: No Social Presence`); return null; }
+// ==================== 2. RADAR & MIGRATION ENGINE ====================
 
-    const warm = await validateWarmWallet(creator);
-    if (!warm.warm) { log(`   ❌ REJECT: New Developer`); return null; }
-
-    const auth = await checkAuthorities(mint);
-    if (!auth.safe) { log(`   ❌ REJECT: Authorities Active`); return null; }
-
-    const holders = await checkHolderDistribution(mint);
-    if (!holders.safe) { log(`   ❌ REJECT: High Supply Concentration`); return null; }
-
-    return { age: warm.age, top1: holders.top1 };
-}
-
-// ==================== RADAR ====================
 function startRadar() {
     const ws = new WebSocket('wss://pumpportal.fun/api/data');
     
     ws.on('open', () => {
-        log('📡 WebSocket Connected! Monitoring Bonding Curves...');
+        log('📡 Connected to PumpPortal WebSocket');
         ws.send(JSON.stringify({ "method": "subscribeTokenTrade" })); 
     });
 
-    setInterval(() => log('💓 Heartbeat: Bot is actively scanning trades...'), 60000);
+    // Activity Heartbeat
+    setInterval(() => log('💓 Scanner Active: Listening for PumpSwap graduates...'), 45000);
 
     ws.on('message', async (data) => {
         try {
             const event = JSON.parse(data.toString());
-            if (!event.mint) return;
+            if (!event.mint || alertedMints.has(event.mint)) return;
 
             const mcap = event.marketCapSol || 0;
 
-            // --- 🟢 LIVE PROGRESS LOG (Ab screen silent nahi hogi) ---
-            if (mcap >= 550 && mcap < 600) {
+            // 🟢 LIVE TRACKING LOG (45 SOL se upar walay coins)
+            if (mcap >= 45 && mcap < 65) {
                 const now = Date.now();
-                if (now - (lastLogTime.get(event.mint) || 0) > 15000) {
-                    log(`📈 PROGRESS: ${event.name} is climbing (${mcap.toFixed(1)} SOL)`);
-                    lastLogTime.set(event.mint, now);
+                if (now - (lastProgressLog.get(event.mint) || 0) > 20000) {
+                    log(`📈 TRACKING: ${event.name} climbing... Current Cap: ${mcap.toFixed(1)} SOL`);
+                    lastProgressLog.set(event.mint, now);
                 }
             }
 
-            // --- 🎯 FINAL TARGET: 600 SOL (PumpSwap Graduation Zone) ---
-            if (mcap >= 600 && !alertedMints.has(event.mint)) {
+            // 🎯 TRIGGER: PUMPSWAP GRADUATION ZONE (65 SOL+)
+            // Jaise hi Dumb Money wala scenario hit hoga (65+ SOL), analysis trigger hogi
+            if (mcap >= 65) {
                 alertedMints.add(event.mint);
-                log(`🔥 TARGET REACHED: ${event.name} hit 65 SOL! Analyzing...`);
+                log(`🔥 TARGET DETECTED: ${event.name} hit ${mcap.toFixed(1)} SOL (PumpSwap Zone)`);
 
+                // 15s Delay: Taake Pumpswap par liquidity migrate ho jaye aur blockchain update ho
                 setTimeout(async () => {
-                    const result = await analyzeToken(event.mint, event.traderPublicKey || event.user, event.name);
+                    const analysis = await performForensic(event.mint, event.traderPublicKey || event.user, event.name);
                     
-                    if (result) {
-                        const report = `🎓 **ELITE GRADUATE DETECTED** 🛡️\n\n` +
+                    if (analysis.safe) {
+                        const report = `🎓 **ELITE PUMPSWAP GRADUATE** 🛡️\n\n` +
                                        `🏷️ **Name:** ${event.name}\n` +
-                                       `👴 **Dev Age:** ${result.age} days\n` +
-                                       `👥 **Top Whale:** ${result.top1.toFixed(1)}%\n\n` +
+                                       `👴 **Dev Age:** ${analysis.age} days\n` +
+                                       `✅ **Status:** Graduate (PumpSwap)\n\n` +
                                        `🛒 [Buy on PumpSwap](https://pumpswap.com/swap?outputCurrency=${event.mint})\n` +
                                        `📊 [DexScreener](https://dexscreener.com/solana/${event.mint})`;
 
                         await bot.sendMessage(TELEGRAM_CHAT_ID, report, { parse_mode: 'Markdown' });
-                        log(`🚀 ALERT SENT: ${event.name}`);
+                        log(`🚀 ELITE ALERT SENT: ${event.name}`);
+                    } else {
+                        log(`   ❌ REJECTED: ${analysis.reason}`);
                     }
                 }, 15000); 
             }
-        } catch (e) {}
+        } catch (e) {
+            // Silently handle JSON errors
+        }
     });
 
     ws.on('close', () => {
-        log('⚠️ WebSocket Closed. Reconnecting...');
+        log('⚠️ Connection lost. Reconnecting in 3s...');
         setTimeout(startRadar, 3000);
     });
 }
 
+// ==================== START ====================
 startRadar();
