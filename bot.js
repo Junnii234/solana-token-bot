@@ -16,39 +16,44 @@ const log = (msg) => console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
 const error = (msg) => console.error(`[${new Date().toLocaleTimeString()}] ❌ ${msg}`);
 const reject = (reason) => console.log(`[${new Date().toLocaleTimeString()}] ⚠️  REJECT: ${reason}`);
 
-// ==================== WARM WALLET DETECTION ====================
+// ==================== WARM WALLET DETECTION (FIXED) ====================
 
 async function checkWarmWallet(creator) {
     try {
         log(`   🔍 Analyzing Dev Wallet: ${creator.slice(0, 10)}...`);
         
-const res = await axios.post(HELIUS_RPC, {
-    jsonrpc: "2.0", id: 1, 
-    method: "getSignaturesForAddress", 
-    params: [creator, { limit: 1000 }] // Limit ko 300 se barha kar 1000 kar dein
-}, { headers: HEADERS, timeout: 8000 });
+        // FIX: Sab se purani transaction (Oldest) aur sab se nayi (Newest) ka time uthana
+        const oldestRes = await axios.post(HELIUS_RPC, {
+            jsonrpc: "2.0", id: 1, 
+            method: "getSignaturesForAddress", 
+            params: [creator, { limit: 1, oldestFirst: true }] // Seedsha pehli tx par jump
+        }, { headers: HEADERS, timeout: 8000 });
 
+        const newestRes = await axios.post(HELIUS_RPC, {
+            jsonrpc: "2.0", id: 1, 
+            method: "getSignaturesForAddress", 
+            params: [creator, { limit: 1 }] // Sab se taza tx
+        }, { headers: HEADERS, timeout: 8000 });
 
-        const txs = res.data.result || [];
+        const oldestTx = oldestRes.data.result?.[0];
+        const newestTx = newestRes.data.result?.[0];
 
-        // Check 1: Transaction History
-        if (txs.length === 0) {
-            reject(`No transaction history`);
+        if (!oldestTx || !newestTx) {
+            reject(`No transaction history found`);
             return { warm: false };
         }
 
-        // Check 2: Age >= 90 days
-        const oldestTx = txs[txs.length - 1];
-        const newestTx = txs[0];
-        const walletAgeMs = (newestTx.blockTime - oldestTx.blockTime) * 1000;
-        const walletAgeDays = walletAgeMs / (1000 * 60 * 60 * 24);
+        // Logic: Age calculation using blockTime (Total Wallet Span)
+        const walletAgeSeconds = newestTx.blockTime - oldestTx.blockTime;
+        const walletAgeDays = walletAgeSeconds / 86400;
 
+        // Check 1: Age >= 90 days
         if (walletAgeDays < 90) {
             reject(`Age: ${walletAgeDays.toFixed(1)}d (need 90+)`);
             return { warm: false };
         }
 
-        // Check 3: Balance >= 2 SOL
+        // Check 2: Balance >= 2 SOL
         const balanceRes = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, 
             method: "getBalance", 
@@ -61,11 +66,10 @@ const res = await axios.post(HELIUS_RPC, {
             return { warm: false };
         }
 
-        log(`   ✅ WARM WALLET VERIFIED`);
+        log(`   ✅ WARM WALLET VERIFIED: ${walletAgeDays.toFixed(1)} days old`);
         return { 
             warm: true, 
             age: walletAgeDays.toFixed(1),
-            txCount: txs.length,
             balance: balanceSol.toFixed(3)
         };
 
@@ -85,8 +89,7 @@ async function sendAlert(mint, name, metrics) {
             `📋 **Mint:** \`${mint}\`\n\n` +
             `✅ **VERIFIED METRICS:**\n` +
             `• Wallet Age: ${metrics.age} days\n` +
-            `• Balance: ${metrics.balance} SOL\n` +
-            `• History: ${metrics.txCount} txs\n\n` +
+            `• Balance: ${metrics.balance} SOL\n\n` +
             `💰 [Pump.Fun](https://pump.fun/${mint})\n` +
             `📊 [DexScreener](https://dexscreener.com/solana/${mint})`;
 
@@ -126,8 +129,6 @@ function monitorPumpFun() {
             alertedMints.add(mint);
 
             log(`\n🎯 NEW TOKEN DETECTED: ${name}`);
-            log(`   Mint: ${mint}`);
-
             const walletCheck = await checkWarmWallet(creator);
 
             if (walletCheck.warm) {
@@ -157,16 +158,13 @@ async function startup() {
     console.clear();
     console.log(`
 ╔════════════════════════════════════════════════════════════╗
-║  🚀 V12.0 - HYBRID WEBSOCKET MONITOR                      ║
+║  🛡️ V23.0 - ACCURATE AGE MONITORING                       ║
 ║  🔥 Real Dev Detection (90+d, 2+SOL)                       ║
-║  ⚡ Powered by PumpPortal & Helius                        ║
 ╚════════════════════════════════════════════════════════════╝
     `);
 
     log("✅ System Check Passed");
     log(`📱 Telegram Bot: Active`);
-    log(`🔗 Helius RPC: Connected\n`);
-
     monitorPumpFun();
 }
 
