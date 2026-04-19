@@ -12,48 +12,45 @@ const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
 const alertedMints = new Set();
 const HEADERS = { 'Content-Type': 'application/json' };
 
-const log = (msg) => console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
+const log = (msg) => console.log(`[${new Date().toLocaleTimeString()}] 🟢 ${msg}`);
 const error = (msg) => console.error(`[${new Date().toLocaleTimeString()}] ❌ ${msg}`);
-const reject = (reason) => console.log(`[${new Date().toLocaleTimeString()}] ⚠️  REJECT: ${reason}`);
+const reject = (reason) => console.log(`[${new Date().toLocaleTimeString()}] ⚠️ REJECT: ${reason}`);
 
-// ==================== WARM WALLET DETECTION (FIXED) ====================
+// ==================== AGE & BALANCE LOGIC (V23.2) ====================
 
 async function checkWarmWallet(creator) {
     try {
         log(`   🔍 Analyzing Dev Wallet: ${creator.slice(0, 10)}...`);
         
-        // FIX: Sab se purani transaction (Oldest) aur sab se nayi (Newest) ka time uthana
+        // Aaj ka waqt (Seconds mein)
+        const nowInSeconds = Math.floor(Date.now() / 1000);
+
+        // 1. Sab se PURANI transaction (OldestFirst) uthana
         const oldestRes = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, 
             method: "getSignaturesForAddress", 
-            params: [creator, { limit: 1, oldestFirst: true }] // Seedsha pehli tx par jump
-        }, { headers: HEADERS, timeout: 8000 });
-
-        const newestRes = await axios.post(HELIUS_RPC, {
-            jsonrpc: "2.0", id: 1, 
-            method: "getSignaturesForAddress", 
-            params: [creator, { limit: 1 }] // Sab se taza tx
-        }, { headers: HEADERS, timeout: 8000 });
+            params: [creator, { limit: 1, oldestFirst: true }] 
+        }, { headers: HEADERS, timeout: 10000 });
 
         const oldestTx = oldestRes.data.result?.[0];
-        const newestTx = newestRes.data.result?.[0];
 
-        if (!oldestTx || !newestTx) {
-            reject(`No transaction history found`);
+        if (!oldestTx) {
+            reject(`No transaction history found on-chain`);
             return { warm: false };
         }
 
-        // Logic: Age calculation using blockTime (Total Wallet Span)
-        const walletAgeSeconds = newestTx.blockTime - oldestTx.blockTime;
+        // Calculation Logic: Agar blockTime null ho to current time use karein
+        const birthTime = oldestTx.blockTime || nowInSeconds;
+        const walletAgeSeconds = nowInSeconds - birthTime;
         const walletAgeDays = walletAgeSeconds / 86400;
 
-        // Check 1: Age >= 90 days
+        // Check 1: Age Filter (90 Days)
         if (walletAgeDays < 90) {
-            reject(`Age: ${walletAgeDays.toFixed(1)}d (need 90+)`);
+            reject(`Age: ${walletAgeDays.toFixed(1)}d (Criteria: 90+ Required)`);
             return { warm: false };
         }
 
-        // Check 2: Balance >= 2 SOL
+        // Check 2: Balance Filter (2 SOL)
         const balanceRes = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, 
             method: "getBalance", 
@@ -62,47 +59,47 @@ async function checkWarmWallet(creator) {
 
         const balanceSol = (balanceRes.data.result.value || 0) / 1e9;
         if (balanceSol < 2) {
-            reject(`Balance: ${balanceSol.toFixed(3)}SOL (need 2+)`);
+            reject(`Age: ${walletAgeDays.toFixed(1)}d | Balance: ${balanceSol.toFixed(2)} SOL (Criteria: 2+ Required)`);
             return { warm: false };
         }
 
-        log(`   ✅ WARM WALLET VERIFIED: ${walletAgeDays.toFixed(1)} days old`);
+        log(`   ✅ CRITERIA PASSED: ${walletAgeDays.toFixed(1)} days | ${balanceSol.toFixed(2)} SOL`);
         return { 
             warm: true, 
             age: walletAgeDays.toFixed(1),
-            balance: balanceSol.toFixed(3)
+            balance: balanceSol.toFixed(2)
         };
 
     } catch (e) {
-        error(`Forensic Error: ${e.message}`);
+        error(`Forensic Logic Error: ${e.message}`);
         return { warm: false };
     }
 }
 
-// ==================== SEND ALERT ====================
+// ==================== TELEGRAM NOTIFICATION ====================
 
 async function sendAlert(mint, name, metrics) {
     try {
         const report = 
-            `🌟 **REAL DEV - PUMP.FUN** 🌟\n\n` +
-            `🏷️ **Token:** ${name}\n` +
-            `📋 **Mint:** \`${mint}\`\n\n` +
-            `✅ **VERIFIED METRICS:**\n` +
+            `🚀 **VERIFIED DEV DETECTED** 🚀\n\n` +
+            `**Token:** ${name}\n` +
+            `**Mint:** \`${mint}\`\n\n` +
+            `📊 **Dev Statistics:**\n` +
             `• Wallet Age: ${metrics.age} days\n` +
-            `• Balance: ${metrics.balance} SOL\n\n` +
-            `💰 [Pump.Fun](https://pump.fun/${mint})\n` +
-            `📊 [DexScreener](https://dexscreener.com/solana/${mint})`;
+            `• Current Balance: ${metrics.balance} SOL\n\n` +
+            `🔗 [Pump.Fun](https://pump.fun/${mint})\n` +
+            `📈 [DexScreener](https://dexscreener.com/solana/${mint})`;
 
         await bot.sendMessage(TELEGRAM_CHAT_ID, report, { 
             parse_mode: 'Markdown',
             disable_web_page_preview: true
         });
         
-        log(`📤 ALERT SENT FOR: ${name}`);
+        log(`📤 Telegram Alert Sent for: ${name}`);
         return true;
 
     } catch (e) {
-        error(`Telegram Failed: ${e.message}`);
+        error(`Telegram Alert Failed: ${e.message}`);
         return false;
     }
 }
@@ -110,11 +107,11 @@ async function sendAlert(mint, name, metrics) {
 // ==================== MONITORING LOGIC ====================
 
 function monitorPumpFun() {
-    log('📡 Initializing WebSocket Connection...');
+    log('📡 Connecting to PumpPortal WebSocket...');
     const ws = new WebSocket('wss://pumpportal.fun/api/data');
 
     ws.on('open', () => {
-        log('✅ WebSocket Connected. Subscribing to New Tokens...');
+        log('✅ Connected! Watching for New Tokens...');
         ws.send(JSON.stringify({ "method": "subscribeNewToken" }));
     });
 
@@ -128,22 +125,21 @@ function monitorPumpFun() {
             if (!mint || alertedMints.has(mint)) return;
             alertedMints.add(mint);
 
-            log(`\n🎯 NEW TOKEN DETECTED: ${name}`);
+            log(`\n🎯 NEW TOKEN: ${name} (${mint.slice(0, 6)}...)`);
             const walletCheck = await checkWarmWallet(creator);
 
             if (walletCheck.warm) {
-                log(`🚀 CRITERIA MATCHED! Sending Telegram Alert...`);
+                log(`🚀 BINGO! Sending alert to Telegram...`);
                 await sendAlert(mint, name, walletCheck);
             }
 
         } catch (e) {
-            error(`Event Processing Error: ${e.message}`);
+            error(`Message processing error: ${e.message}`);
         }
     });
 
     ws.on('close', () => {
-        error('WebSocket Connection Closed.');
-        log('⏳ Reconnecting in 5 seconds...');
+        error('WebSocket Closed. Reconnecting in 5s...');
         setTimeout(monitorPumpFun, 5000);
     });
 
@@ -158,13 +154,12 @@ async function startup() {
     console.clear();
     console.log(`
 ╔════════════════════════════════════════════════════════════╗
-║  🛡️ V23.0 - ACCURATE AGE MONITORING                       ║
-║  🔥 Real Dev Detection (90+d, 2+SOL)                       ║
+║  🛡️  BOT V23.2 - BULLETPROOF AGE LOGIC                    ║
+║  🔥  Filtering: 90+ Days & 2+ SOL Balance                 ║
 ╚════════════════════════════════════════════════════════════╝
     `);
 
-    log("✅ System Check Passed");
-    log(`📱 Telegram Bot: Active`);
+    log("✅ Starting Monitoring...");
     monitorPumpFun();
 }
 
