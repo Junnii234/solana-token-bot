@@ -16,6 +16,9 @@ const connection = new Connection(HELIUS_RPC, "confirmed");
 
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 
+// ✅ FIXED: Use actual Pump.fun migration account (handles ALL graduates)
+const PUMP_FUN_MIGRATION_ACCOUNT = "39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg";
+
 const RAYDIUM_PROGRAMS = [
     "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8", // CPMM
     "CAMMCzo5YL8w4VFF3i5nVjB6w3Vv4YFQj1h7Q9h3i6k"  // CLMM
@@ -34,22 +37,20 @@ const error = (m) => console.log(`❌ ${m}`);
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-// ================= RETRY LOGIC (ONLY ADDITION) =================
+// ================= RETRY LOGIC =================
 
-const RETRY_DELAY = 2000; // 2 seconds between RPC calls
+const RETRY_DELAY = 2000;
 const MAX_RETRIES = 3;
 
 async function axiosWithRetry(config, retries = 0) {
     try {
-        // Add delay to avoid rate limit
         await sleep(RETRY_DELAY);
         
         const res = await axios.post(HELIUS_RPC, config);
         
-        // Check for rate limit error
         if (res.data.error && res.data.error.code === -32429 && retries < MAX_RETRIES) {
             error(`Rate limited (attempt ${retries + 1}/${MAX_RETRIES}), retrying...`);
-            await sleep(5000); // Wait 5 seconds before retry
+            await sleep(5000);
             return axiosWithRetry(config, retries + 1);
         }
         
@@ -80,7 +81,11 @@ function startPumpListener() {
         try {
             const e = JSON.parse(data.toString());
 
-            if (!e.mint) return;
+            // ✅ FIXED: Better error handling
+            if (!e.mint) {
+                reject(`Pump.fun message missing mint field: ${JSON.stringify(e).substring(0, 100)}`);
+                return;
+            }
 
             pumpTokens.set(e.mint, {
                 creator: e.traderPublicKey,
@@ -90,10 +95,23 @@ function startPumpListener() {
 
             log(`📥 Stored: ${e.symbol}`);
 
-        } catch {}
+        } catch (err) {
+            error(`Pump.fun parse error: ${err.message}`);
+        }
     });
 
-    ws.on("close", () => setTimeout(startPumpListener, 5000));
+    ws.on("close", () => {
+        error("Pump.fun connection closed, reconnecting...");
+        setTimeout(startPumpListener, 5000);
+    });
+
+    // ✅ FIXED: Monitor WebSocket health
+    setInterval(() => {
+        if (ws.readyState !== WebSocket.OPEN) {
+            error("Pump.fun WebSocket unhealthy, forcing reconnect...");
+            ws.close();
+        }
+    }, 30000);
 }
 
 // ================= VERIFY =================
@@ -103,7 +121,8 @@ function verifyPumpToken(mint) {
     if (!t) return false;
 
     const age = (Date.now() - t.time) / 1000;
-    return age < 1800;
+    // ✅ FIXED: Increased TTL from 1800s to 3600s (graduations take time)
+    return age < 3600;
 }
 
 // ================= DEV CHECK (WITH RETRY) =================
@@ -193,10 +212,14 @@ function startRaydiumListener() {
             const sig = logInfo.signature;
             const logs = logInfo.logs.join(" ").toLowerCase();
 
+            // ✅ FIXED: Better log filtering with more keywords
             if (
                 !logs.includes("raydium_migration") &&
                 !logs.includes("liquidity") &&
-                !logs.includes("initialize2")
+                !logs.includes("initialize2") &&
+                !logs.includes("initialize") &&
+                !logs.includes("swap") &&
+                !logs.includes("execute")
             ) return;
 
             const tx = await connection.getParsedTransaction(sig, {
@@ -218,13 +241,64 @@ function startRaydiumListener() {
                 for (let acc of accounts) {
 
                     if (acc === SOL_MINT) continue;
-                    if (acc.length < 32) continue;
+                    // ✅ FIXED: Removed broken length check
+                    // The original check: if (acc.length < 32) continue;
+                    // Was broken because acc is a PublicKey object, not a string
 
                     if (!verifyPumpToken(acc)) continue;
 
                     const meta = pumpTokens.get(acc);
 
-                    log(`🔥 VERIFIED GRADUATION: ${meta.name}`);
+                    log(`🔥 VERIFIED GRADUATION (Raydium): ${meta.name}`);
+
+                    await processToken(acc, meta);
+                }
+            }
+
+        } catch (e) {
+            error(e.message);
+        }
+    });
+}
+
+// ================= MIGRATION ACCOUNT LISTENER (NEW) =================
+// ✅ NEW: This listens to the actual Pump.fun migration account
+// This catches ALL graduates, not just Raydium log keywords
+
+function startMigrationAccountListener() {
+
+    log("🚀 Pump.fun Migration Account Listener Started");
+
+    connection.onLogs(PUMP_FUN_MIGRATION_ACCOUNT, async (logInfo) => {
+        try {
+
+            const sig = logInfo.signature;
+
+            const tx = await connection.getParsedTransaction(sig, {
+                maxSupportedTransactionVersion: 0
+            });
+
+            if (!tx || tx.meta?.err) return;
+
+            const instructions = tx.transaction.message.instructions;
+
+            // Extract all accounts involved in this transaction
+            const allAccounts = new Set();
+
+            for (let ix of instructions) {
+                if (ix.accounts) {
+                    ix.accounts.forEach(a => {
+                        allAccounts.add(a.toBase58?.() || a);
+                    });
+                }
+            }
+
+            // Check if any account matches a stored pump token
+            for (let acc of allAccounts) {
+                if (verifyPumpToken(acc)) {
+                    const meta = pumpTokens.get(acc);
+
+                    log(`🔥 VERIFIED GRADUATION (Migration Account): ${meta.name}`);
 
                     await processToken(acc, meta);
                 }
@@ -239,10 +313,17 @@ function startRaydiumListener() {
 // ================= START =================
 
 function start() {
-    log("🚀 BOT V6 STARTED (WITH RETRY LOGIC)");
+    log("🚀 BOT V7 STARTED (FIXED + MIGRATION LISTENER)");
+    log("Changes:");
+    log("  ✅ Fixed: Removed broken length check");
+    log("  ✅ Fixed: Increased pump token TTL to 3600s");
+    log("  ✅ NEW: Added migration account listener");
+    log("  ✅ NEW: Added WebSocket health monitoring");
+    log("  ✅ NEW: Better error logging");
 
     startPumpListener();
     startRaydiumListener();
+    startMigrationAccountListener();  // ✅ NEW: Catch ALL graduates
 }
 
 start();
