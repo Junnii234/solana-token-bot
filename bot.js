@@ -29,7 +29,7 @@ async function axiosWithRetry(config, retries = 0) {
     }
 }
 
-// ================= CORE FORENSIC ENGINE (STRICT LOGIC) =================
+// ================= CORE FORENSIC ENGINE (V21 - FIXED LOGIC) =================
 
 async function performFullForensic(mint) {
     try {
@@ -51,23 +51,48 @@ async function performFullForensic(mint) {
         const info = accInfo.data.result?.value?.data?.parsed?.info;
         const authSafe = info && info.mintAuthority === null && info.freezeAuthority === null;
 
-        // 4. Dev Age Logic (Newest vs Oldest Signature)
+        // 4. Dev Age Logic (V21 FIX: Calculate from creator's first vs mint creation time)
         const devNewSigs = await axiosWithRetry({ jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [creator, { limit: 1 }] });
         const devOldSigs = await axiosWithRetry({ jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [creator, { limit: 1, oldestFirst: true }] });
         
-        const newestTime = devNewSigs.data.result[0]?.blockTime || now;
-        const oldestTime = devOldSigs.data.result[0]?.blockTime || newestTime;
-        const devAgeDays = Math.max(0, (newestTime - oldestTime) / 86400).toFixed(1);
+        const devNewestTime = devNewSigs.data.result[0]?.blockTime || now;
+        const devOldestTime = devOldSigs.data.result[0]?.blockTime || devNewestTime;
+        // V21 FIX: Dev activity span instead of comparing to mint creation
+        const devActivitySpan = Math.max(0, (devNewestTime - devOldestTime) / 86400).toFixed(1);
+        
+        // Calculate "how long ago dev's first action was"
+        const devFirstActionAge = Math.max(0, (now - devOldestTime) / 86400).toFixed(1);
 
         // 5. Funding Source (Check if first TX was from CEX)
         const firstDevTx = await axiosWithRetry({ jsonrpc: "2.0", id: 1, method: "getTransaction", params: [devOldSigs.data.result[0].signature, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed" }] });
         const funder = firstDevTx.data.result?.transaction?.message?.accountKeys[0]?.pubkey;
         const isCEX = KNOWN_EXCHANGES.includes(funder);
 
-        // FINAL CRITERIA CHECK
-        const pass = (parseFloat(devAgeDays) >= 90 || isCEX) && authSafe;
+        // ========== V21 IMPROVED PASS/FAIL LOGIC ==========
+        // PASS if:
+        // 1. Auth is clean (mandatory)
+        // 2. AND one of:
+        //    a) Dev account age >= 90 days (established dev) 
+        //    b) OR CEX funded (institutional)
+        //    c) OR dev has extensive activity span (active developer)
+        // ================================================
+        
+        const devHasGoodHistory = parseFloat(devActivitySpan) >= 30; // Dev active for 30+ days
+        const devIsEstablished = parseFloat(devFirstActionAge) >= 90; // Dev's first action was 90+ days ago
+        
+        const pass = authSafe && (devIsEstablished || isCEX || devHasGoodHistory);
 
-        return { mint, creator, pairAgeDays, devAgeDays, authSafe, isCEX, pass };
+        return { 
+            mint, 
+            creator, 
+            pairAgeDays, 
+            devActivitySpan,
+            devFirstActionAge,
+            devHasGoodHistory,
+            authSafe, 
+            isCEX, 
+            pass 
+        };
     } catch (e) {
         return { error: `Forensic Failed: ${e.message}` };
     }
@@ -82,12 +107,22 @@ bot.onText(/\/test (.+)/, async (msg, match) => {
     const res = await performFullForensic(mint);
     if (res.error) return bot.sendMessage(msg.chat.id, `❌ **Error:** ${res.error}`);
 
-    let report = `📊 **FORENSIC REPORT (V20)**\n\n`;
+    let report = `📊 **FORENSIC REPORT (V21)**\n\n`;
     report += `**Mint:** \`${res.mint}\`\n`;
-    report += `**Auth:** ${res.authSafe ? "✅ Clean (M/F Revoked)" : "❌ Risk (Not Revoked)"}\n`;
-    report += `**Pair Age:** ${res.pairAgeDays} days\n`;
-    report += `**Dev Age:** ${res.devAgeDays} days\n`;
-    report += `**Funding:** ${res.isCEX ? "✅ CEX Funded" : "⚠️ Organic"}\n\n`;
+    report += `**Creator:** \`${res.creator?.substring(0, 8)}...\`\n\n`;
+    report += `**✅ AUTHENTICATION**\n`;
+    report += `Auth Status: ${res.authSafe ? "✅ Clean (M/F Revoked)" : "❌ Risk (Not Revoked)"}\n\n`;
+    report += `**📅 AGE METRICS**\n`;
+    report += `Pair Age: ${res.pairAgeDays} days\n`;
+    report += `Dev First Action: ${res.devFirstActionAge} days ago\n`;
+    report += `Dev Activity Span: ${res.devActivitySpan} days\n\n`;
+    report += `**💰 FUNDING**\n`;
+    report += `Funding: ${res.isCEX ? "✅ CEX Funded" : "⚠️ Organic"}\n\n`;
+    report += `**📈 PASS/FAIL LOGIC**\n`;
+    report += `Auth Safe: ${res.authSafe ? "✓" : "✗"}\n`;
+    report += `Dev Established (90d): ${res.devFirstActionAge >= 90 ? "✓" : "✗"}\n`;
+    report += `CEX Funded: ${res.isCEX ? "✓" : "✗"}\n`;
+    report += `Dev Active (30d span): ${res.devHasGoodHistory ? "✓" : "✗"}\n\n`;
     report += `**Verdict:** ${res.pass ? "🚀 **PASS (Alerting)**" : "🚫 **FAIL (Filtering)**"}`;
 
     bot.sendMessage(msg.chat.id, report, { parse_mode: 'Markdown' });
@@ -98,7 +133,7 @@ bot.onText(/\/test (.+)/, async (msg, match) => {
 function startMigrationListener() {
     const ws = new WebSocket("wss://pumpportal.fun/api/data");
     ws.on("open", () => {
-        console.log("🛡️ V20 Radar Online");
+        console.log("🛡️ V21 Radar Online");
         ws.send(JSON.stringify({ method: "subscribeTokenTrade" }));
     });
 
@@ -114,11 +149,12 @@ function startMigrationListener() {
             const res = await performFullForensic(e.mint);
             if (res.pass) {
                 bot.sendMessage(TELEGRAM_CHAT_ID, 
-                    `🚀 **SAFE GRADUATE DETECTED**\n\n` +
+                    `🚀 **SAFE GRADUATE DETECTED (V21)**\n\n` +
                     `**Mint:** \`${res.mint}\`\n` +
-                    `**Dev Age:** ${res.devAgeDays}d\n` +
+                    `**Dev Age:** ${res.devFirstActionAge}d\n` +
                     `**Pair Age:** ${res.pairAgeDays}d\n` +
-                    `**Auth:** ✅ Clean\n\n` +
+                    `**Auth:** ✅ Clean\n` +
+                    `**Reason:** ${res.isCEX ? "CEX Funded" : res.devIsEstablished ? "Established Dev" : "Active Dev"}\n\n` +
                     `📈 [DexScreener](https://dexscreener.com/solana/${res.mint})`
                 , { parse_mode: 'Markdown' });
             }
@@ -129,4 +165,4 @@ function startMigrationListener() {
 }
 
 startMigrationListener();
-console.log("BOT RUNNING - V20 - TOKEN ID UPDATED");
+console.log("BOT RUNNING - V21 - FIXED FILTERING LOGIC");
