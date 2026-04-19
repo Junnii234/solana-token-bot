@@ -101,26 +101,48 @@ async function checkAuthorities(mint) {
 bot.onText(/\/test (.+)/, async (msg, match) => {
     const chatId = msg.chat.id;
     const mint = match[1].trim();
-    bot.sendMessage(chatId, `🔍 Testing Mint: \`${mint}\`...`, { parse_mode: 'Markdown' });
+    bot.sendMessage(chatId, `🔍 Deep Scanning Blockchain: \`${mint}\`...`, { parse_mode: 'Markdown' });
 
-    const auth = await checkAuthorities(mint);
-    const storedData = pumpTokens.get(mint);
-    
-    let report = `📊 **SCAN REPORT**\n\n`;
-    report += `Mint: \`${mint}\`\n`;
-    report += `Authorities: ${auth ? "✅ Clean (Mint/Freeze Revoked)" : "❌ Risk (Not Revoked)"}\n`;
-    
-    if (storedData) {
-        const dev = await devCheck(storedData.creator);
-        report += `Dev Trust: ${dev.type}\n`;
-        report += `Dev Age: ${dev.age} ${dev.age === 'Trusted' ? '' : 'days'}\n`;
-    } else {
-        report += `\n⚠️ Dev details not in memory. Bot only tracks tokens launched while it was running.`;
+    try {
+        // 1. Authorities Check
+        const auth = await checkAuthorities(mint);
+        
+        // 2. Fetch Creator from Blockchain (if not in memory)
+        let creator = pumpTokens.get(mint)?.creator;
+        
+        if (!creator) {
+            const txs = await axiosWithRetry({
+                jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress",
+                params: [mint, { limit: 1, oldestFirst: true }] // Pehli tx yani mint transaction
+            });
+            const sig = txs.data.result[0]?.signature;
+            const txDetail = await axiosWithRetry({
+                jsonrpc: "2.0", id: 1, method: "getTransaction",
+                params: [sig, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed" }]
+            });
+            creator = txDetail.data.result?.transaction?.message?.accountKeys[0]?.pubkey;
+        }
+
+        let report = `📊 **SCAN REPORT**\n\n`;
+        report += `Mint: \`${mint}\`\n`;
+        report += `Authorities: ${auth ? "✅ Clean" : "❌ Risk"}\n`;
+
+        if (creator) {
+            const dev = await devCheck(creator);
+            report += `Dev Trust: ${dev.type}\n`;
+            report += `Dev Age: ${dev.age} ${dev.age === 'Trusted' ? '' : 'days'}\n`;
+            report += `Creator: \`${creator}\`\n`;
+        } else {
+            report += `Dev Data: Could not fetch creator.\n`;
+        }
+
+        bot.sendMessage(chatId, report, { parse_mode: 'Markdown' });
+
+    } catch (e) {
+        bot.sendMessage(chatId, "❌ Error scanning this mint. Make sure it's a valid Solana address.");
     }
-
-    bot.sendMessage(chatId, report, { parse_mode: 'Markdown' });
 });
-
+                                  
 // ================= MAIN LISTENERS =================
 
 // 1. Monitor New Launches for Early CEX Alerts
