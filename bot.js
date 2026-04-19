@@ -4,7 +4,7 @@ const axios = require('axios');
 const WebSocket = require('ws');
 
 // ==================== CONFIG ====================
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || "8758743414:AAGUbb0kA9fPMfU-diX7-lVVal7cxzOTqTM";
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || "8758743414:AAEKc_ORnq15WQHIR1jbKqh7psZfUcSCAcQ";
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || "8006731872";
 const HELIUS_RPC = process.env.HELIUS_RPC || `https://mainnet.helius-rpc.com/?api-key=cad2ea55-0ae1-4005-8b8a-3b04167a57fb`;
 
