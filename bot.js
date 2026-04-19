@@ -16,7 +16,7 @@ const log = (msg) => console.log(`[${new Date().toLocaleTimeString()}] 🟢 ${ms
 const error = (msg) => console.error(`[${new Date().toLocaleTimeString()}] ❌ ${msg}`);
 const reject = (reason) => console.log(`[${new Date().toLocaleTimeString()}] ⚠️  REJECT: ${reason}`);
 
-// ==================== WARM WALLET DETECTION ====================
+// ==================== STEP-WISE WARM WALLET DETECTION ====================
 
 async function checkWarmWallet(creator) {
     try {
@@ -28,9 +28,8 @@ async function checkWarmWallet(creator) {
         let historyFound = false;
         let totalTxs = 0;
         let birthTime = null;
-        const programSet = new Set();
 
-        // Loop chala kar history mein peeche jayenge (Max 5 pages / 5000 txs)
+        // Step 1: Age Check
         for (let i = 0; i < 5; i++) {
             const params = [creator, { limit: 1000 }];
             if (lastSignature) params[1].before = lastSignature;
@@ -47,13 +46,6 @@ async function checkWarmWallet(creator) {
             historyFound = true;
             totalTxs += txs.length;
 
-            // Collect program IDs for diversity check
-            for (const tx of txs) {
-                if (tx.programId) {
-                    programSet.add(tx.programId);
-                }
-            }
-
             const oldestTxInBatch = txs[txs.length - 1]; 
             lastSignature = oldestTxInBatch.signature;
             birthTime = oldestTxInBatch.blockTime || now;
@@ -68,30 +60,48 @@ async function checkWarmWallet(creator) {
             return { warm: false };
         }
 
-        // Check 1: Age >= 270 days (9 months)
         if (walletAgeDays < 270) {
             reject(`Age: ${walletAgeDays.toFixed(1)}d (need 270+)`);
             return { warm: false };
         }
 
-        // Check 2: Balance >= 2 SOL
+        // Step 2: Balance Check
         const balanceRes = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, method: "getBalance", params: [creator]
         }, { headers: HEADERS, timeout: 5000 });
 
         const balanceSol = (balanceRes.data.result.value || 0) / 1e9;
         if (balanceSol < 2) {
-            reject(`Age: ${walletAgeDays.toFixed(1)}d | Balance: ${balanceSol.toFixed(2)}SOL (need 2+)`);
+            reject(`Balance: ${balanceSol.toFixed(2)}SOL (need 2+)`);
             return { warm: false };
         }
 
-        // Check 3: Transaction Count >= 200
+        // Step 3: Transaction Count
         if (totalTxs < 200) {
             reject(`Tx Count: ${totalTxs} (need 200+)`);
             return { warm: false };
         }
 
-        // Check 4: Program Diversity >= 3
+        // Step 4: Program Diversity (only if previous steps passed)
+        const programSet = new Set();
+        for (let i = 0; i < Math.min(10, totalTxs); i++) { // limit to first 10 txs for efficiency
+            try {
+                const sig = lastSignature;
+                const txDetail = await axios.post(HELIUS_RPC, {
+                    jsonrpc: "2.0", id: 1,
+                    method: "getTransaction",
+                    params: [sig, { encoding: "json" }]
+                }, { headers: HEADERS, timeout: 8000 });
+
+                const instructions = txDetail.data.result?.transaction?.message?.instructions || [];
+                instructions.forEach(ix => {
+                    if (ix.programId) programSet.add(ix.programId);
+                });
+            } catch (e) {
+                error(`Program Diversity Fetch Error: ${e.message}`);
+            }
+        }
+
         const programCount = programSet.size;
         if (programCount < 3) {
             reject(`Program Diversity: ${programCount} (need 3+)`);
@@ -193,7 +203,7 @@ async function startup() {
     console.clear();
     console.log(`
 ╔════════════════════════════════════════════════════════════╗
-║  🚀 V27.0 - BULLETPROOF FORENSIC MONITOR                   ║
+║  🚀 V28.0 - STEP-WISE FORENSIC MONITOR                     ║
 ║  🔥 Real Dev Detection (270+d, 2+SOL, 200+Txs, 3+Programs) ║
 ║  ⚡ Powered by PumpPortal & Helius                         ║
 ╚════════════════════════════════════════════════════════════╝
