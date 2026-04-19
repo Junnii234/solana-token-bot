@@ -14,13 +14,6 @@ const HELIUS_RPC = process.env.HELIUS_RPC || "https://mainnet.helius-rpc.com/?ap
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
 const connection = new Connection(HELIUS_RPC, "confirmed");
 
-const SOL_MINT = "So11111111111111111111111111111111111111112";
-
-const RAYDIUM_PROGRAMS = [
-    "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8", // CPMM
-    "CAMMCzo5YL8w4VFF3i5nVjB6w3Vv4YFQj1h7Q9h3i6k"  // CLMM
-];
-
 // ================= MEMORY =================
 
 const pumpTokens = new Map();
@@ -29,32 +22,26 @@ const processed = new Set();
 // ================= LOG =================
 
 const log = (m) => console.log(`[${new Date().toLocaleTimeString()}] ${m}`);
-const reject = (m) => console.log(`⚠️ ${m}`);
-const error = (m) => console.log(`❌ ${m}`);
+const reject = (m) => console.log(`[${new Date().toLocaleTimeString()}] ⚠️ ${m}`);
+const error = (m) => console.log(`[${new Date().toLocaleTimeString()}] ❌ ${m}`);
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-// ================= RETRY LOGIC (ONLY ADDITION) =================
+// ================= RETRY LOGIC (YOUR ORIGINAL) =================
 
-const RETRY_DELAY = 2000; // 2 seconds between RPC calls
+const RETRY_DELAY = 2000; 
 const MAX_RETRIES = 3;
 
 async function axiosWithRetry(config, retries = 0) {
     try {
-        // Add delay to avoid rate limit
         await sleep(RETRY_DELAY);
-        
         const res = await axios.post(HELIUS_RPC, config);
-        
-        // Check for rate limit error
         if (res.data.error && res.data.error.code === -32429 && retries < MAX_RETRIES) {
             error(`Rate limited (attempt ${retries + 1}/${MAX_RETRIES}), retrying...`);
-            await sleep(5000); // Wait 5 seconds before retry
+            await sleep(5000); 
             return axiosWithRetry(config, retries + 1);
         }
-        
         return res;
-        
     } catch (e) {
         if (retries < MAX_RETRIES && e.response?.status === 429) {
             error(`429 error (attempt ${retries + 1}/${MAX_RETRIES}), retrying...`);
@@ -65,21 +52,19 @@ async function axiosWithRetry(config, retries = 0) {
     }
 }
 
-// ================= PUMP LISTENER =================
+// ================= PUMP LISTENER (YOUR ORIGINAL) =================
 
 function startPumpListener() {
-
     const ws = new WebSocket("wss://pumpportal.fun/api/data");
 
     ws.on("open", () => {
-        log("✅ Pump.fun connected");
+        log("✅ Pump.fun connected. Storing new tokens...");
         ws.send(JSON.stringify({ method: "subscribeNewToken" }));
     });
 
     ws.on("message", (data) => {
         try {
             const e = JSON.parse(data.toString());
-
             if (!e.mint) return;
 
             pumpTokens.set(e.mint, {
@@ -88,25 +73,25 @@ function startPumpListener() {
                 time: Date.now()
             });
 
-            log(`📥 Stored: ${e.symbol}`);
-
+            // Log sirf har 50th token par taake Railway logs spam na hon
+            if (pumpTokens.size % 50 === 0) log(`📥 Stored ${pumpTokens.size} tokens in memory...`);
         } catch {}
     });
 
     ws.on("close", () => setTimeout(startPumpListener, 5000));
 }
 
-// ================= VERIFY =================
+// ================= VERIFY (YOUR ORIGINAL 30-MIN FILTER) =================
 
 function verifyPumpToken(mint) {
     const t = pumpTokens.get(mint);
     if (!t) return false;
 
     const age = (Date.now() - t.time) / 1000;
-    return age < 1800;
+    return age < 1800; // < 30 minutes
 }
 
-// ================= DEV CHECK (WITH RETRY) =================
+// ================= DEV CHECK (YOUR ORIGINAL 5-DAY FILTER) =================
 
 async function devCheck(wallet) {
     try {
@@ -118,129 +103,110 @@ async function devCheck(wallet) {
         });
 
         const txs = res.data.result || [];
-
         if (!txs.length) return { safe: false };
 
-        const ageDays =
-            ((txs[0].blockTime - txs[txs.length - 1].blockTime) * 1000) /
-            (1000 * 60 * 60 * 24);
-
+        const ageDays = ((txs[0].blockTime - txs[txs.length - 1].blockTime) * 1000) / (1000 * 60 * 60 * 24);
         return { safe: ageDays >= 5, ageDays: ageDays.toFixed(1) };
-
     } catch (e) {
-        error(`devCheck error: ${e.message}`);
         return { safe: false };
     }
 }
 
-// ================= AUTHORITY (WITH RETRY) =================
+// ================= AUTHORITY (YOUR ORIGINAL FILTER) =================
 
 async function checkAuthority(mint) {
     try {
         const res = await axiosWithRetry({
-            jsonrpc: "2.0",
-            id: 1,
-            method: "getAccountInfo",
+            jsonrpc: "2.0", id: 1, method: "getAccountInfo",
             params: [mint, { encoding: "jsonParsed" }]
         });
-
         const info = res.data.result?.value?.data?.parsed?.info;
-
         if (!info) return false;
-
         return !info.mintAuthority;
-
     } catch (e) {
-        error(`checkAuthority error: ${e.message}`);
         return false;
     }
 }
 
-// ================= PROCESS =================
+// ================= PROCESS (YOUR ORIGINAL FLOW) =================
 
 async function processToken(mint, meta) {
-
     if (processed.has(mint)) return;
     processed.add(mint);
 
-    log(`🚀 GRADUATED: ${meta.name}`);
-
+    log(`🚀 GRADUATED: ${meta.name} (Waiting 60s for locks...)`);
+    
+    // Aapka original 60 seconds wait
     await sleep(60000);
 
     const dev = await devCheck(meta.creator);
-    if (!dev.safe) return reject("Dev fail");
+    if (!dev.safe) return reject(`Dev fail: ${meta.name}`);
 
     const auth = await checkAuthority(mint);
-    if (!auth) return reject("Authority fail");
+    if (!auth) return reject(`Authority fail: ${meta.name}`);
 
     await bot.sendMessage(
         TELEGRAM_CHAT_ID,
         `🚀 SAFE TOKEN\n\n${meta.name}\n${mint}\nDev Age: ${dev.ageDays}d\nhttps://dexscreener.com/solana/${mint}`
     );
 
-    log("📤 ALERT SENT");
+    log(`📤 ALERT SENT: ${meta.name}`);
 }
 
-// ================= RAYDIUM TX LISTENER =================
+// ================= OPTIMIZED RAYDIUM TX LISTENER =================
+// Yahan maine `onLogs("all")` hata diya hai jo Helius ko crash kar raha tha.
+// Uski jagah PumpPortal ka apna migration ws use kiya hai taake rate limit na aaye.
 
 function startRaydiumListener() {
+    log("🚀 Raydium Migration Listener Started (RPC Optimized)");
+    const ws = new WebSocket("wss://pumpportal.fun/api/data");
 
-    log("🚀 Raydium TX Listener Started");
-
-    connection.onLogs("all", async (logInfo) => {
-        try {
-
-            const sig = logInfo.signature;
-            const logs = logInfo.logs.join(" ").toLowerCase();
-
-            if (
-                !logs.includes("raydium_migration") &&
-                !logs.includes("liquidity") &&
-                !logs.includes("initialize2")
-            ) return;
-
-            const tx = await connection.getParsedTransaction(sig, {
-                maxSupportedTransactionVersion: 0
-            });
-
-            if (!tx || tx.meta?.err) return;
-
-            const instructions = tx.transaction.message.instructions;
-
-            for (let ix of instructions) {
-
-                const programId = ix.programId.toBase58();
-
-                if (!RAYDIUM_PROGRAMS.includes(programId)) continue;
-
-                const accounts = ix.accounts.map(a => a.toBase58());
-
-                for (let acc of accounts) {
-
-                    if (acc === SOL_MINT) continue;
-                    if (acc.length < 32) continue;
-
-                    if (!verifyPumpToken(acc)) continue;
-
-                    const meta = pumpTokens.get(acc);
-
-                    log(`🔥 VERIFIED GRADUATION: ${meta.name}`);
-
-                    await processToken(acc, meta);
-                }
-            }
-
-        } catch (e) {
-            error(e.message);
-        }
+    ws.on("open", () => {
+        log("✅ Raydium Migration WS Connected");
+        ws.send(JSON.stringify({ method: "subscribeTokenTrade" }));
     });
+
+    ws.on("message", async (data) => {
+        try {
+            const e = JSON.parse(data.toString());
+            
+            if (e.txType === 'raydium_migration') {
+                const mint = e.mint;
+                if (!mint) return;
+
+                // Aapka original verifyPumpToken filter yahan check hoga
+                if (!verifyPumpToken(mint)) return;
+
+                const meta = pumpTokens.get(mint);
+                log(`🔥 VERIFIED GRADUATION: ${meta.name}`);
+                
+                await processToken(mint, meta);
+            }
+        } catch (err) {}
+    });
+
+    ws.on("close", () => setTimeout(startRaydiumListener, 5000));
 }
+
+// ================= MEMORY CLEANER (NEW FIX) =================
+// Yeh Railway ko RAM full hone se bachayega. 
+// Har 1 ghante baad purane tokens remove karega.
+
+setInterval(() => {
+    const now = Date.now();
+    for (let [mint, data] of pumpTokens.entries()) {
+        if ((now - data.time) > 3600000) { // 1 hour
+            pumpTokens.delete(mint);
+        }
+    }
+    log(`🧹 Memory Cleaned. Active tokens tracked: ${pumpTokens.size}`);
+}, 3600000);
 
 // ================= START =================
 
 function start() {
-    log("🚀 BOT V6 STARTED (WITH RETRY LOGIC)");
-
+    console.clear();
+    log("🚀 BOT V6 FIXED STARTED");
     startPumpListener();
     startRaydiumListener();
 }
