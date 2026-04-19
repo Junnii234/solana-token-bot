@@ -3,280 +3,189 @@ require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const WebSocket = require('ws');
+const { Connection, PublicKey } = require('@solana/web3.js');
 
 // ==================== CONFIG ====================
 
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || "PASTE_TOKEN";
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || "PASTE_CHAT_ID";
-const HELIUS_RPC = process.env.HELIUS_RPC || "https://mainnet.helius-rpc.com/?api-key=PASTE_KEY";
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || "8758743414:AAGUbb0kA9fPMfU-diX7-lVVal7cxzOTqTM";
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || "8006731872";
+const HELIUS_RPC = process.env.HELIUS_RPC || "https://mainnet.helius-rpc.com/?api-key=cad2ea55-0ae1-4005-8b8a-3b04167a57fb";
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
 
-const seen = new Set();
+const connection = new Connection(HELIUS_RPC, "confirmed");
 
-const HEADERS = { "Content-Type": "application/json" };
+// Raydium Programs
+const AMM_V4 = new PublicKey("RVKd61ztZW9s8y1zC2h9B6Pp2c7kwh28ykVfoUfH2Lr");
+const CLMM = new PublicKey("CAMMCzo5YL8w4VFF3i5nVjB6w3Vv4YFQj1h7Q9h3i6k"); // approx CLMM
+
+const SOL_MINT = "So11111111111111111111111111111111111111112";
+
+// ==================== MEMORY ====================
+
+const pumpTokens = new Map();
+const seenPools = new Set();
 
 // ==================== LOGS ====================
 
 const log = (m) => console.log(`[${new Date().toLocaleTimeString()}] ${m}`);
-const reject = (m) => console.log(`⚠️ REJECT: ${m}`);
-const error = (m) => console.log(`❌ ${m}`);
+const reject = (m) => console.log(`⚠️ ${m}`);
 
 // ==================== UTIL ====================
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-// ==================== 1. GRADUATION CHECK ====================
+// ==================== PUMP.FUN LISTENER ====================
 
-async function isGraduated(mint) {
-    try {
-        const res = await axios.post(HELIUS_RPC, {
-            jsonrpc: "2.0",
-            id: 1,
-            method: "getSignaturesForAddress",
-            params: [mint, { limit: 10 }]
-        }, { headers: HEADERS });
-
-        const txs = res.data.result || [];
-
-        for (let tx of txs) {
-            const d = await axios.post(HELIUS_RPC, {
-                jsonrpc: "2.0",
-                id: 1,
-                method: "getTransaction",
-                params: [tx.signature, { maxSupportedTransactionVersion: 0 }]
-            }, { headers: HEADERS });
-
-            const logs = d.data?.result?.meta?.logMessages || [];
-            const text = logs.join(" ").toLowerCase();
-
-            if (
-                text.includes("migrate") ||
-                text.includes("raydium") ||
-                text.includes("liquidity") ||
-                text.includes("createpool")
-            ) return true;
-        }
-
-        return false;
-
-    } catch {
-        return false;
-    }
-}
-
-// ==================== 2. DEV WALLET (5+ DAYS RULE FIXED) ====================
-
-async function devScore(wallet) {
-    try {
-        const res = await axios.post(HELIUS_RPC, {
-            jsonrpc: "2.0",
-            id: 1,
-            method: "getSignaturesForAddress",
-            params: [wallet, { limit: 300 }]
-        }, { headers: HEADERS });
-
-        const txs = res.data.result || [];
-
-        if (!txs.length) {
-            return { score: 100, safe: false, ageDays: 0 };
-        }
-
-        const newest = txs[0];
-        const oldest = txs[txs.length - 1];
-
-        const ageDays =
-            ((newest.blockTime - oldest.blockTime) * 1000) /
-            (1000 * 60 * 60 * 24);
-
-        const balRes = await axios.post(HELIUS_RPC, {
-            jsonrpc: "2.0",
-            id: 1,
-            method: "getBalance",
-            params: [wallet]
-        }, { headers: HEADERS });
-
-        const sol = (balRes.data.result.value || 0) / 1e9;
-
-        let score = 0;
-
-        // 🔥 STRICT RULE: 5 DAYS MINIMUM
-        if (ageDays < 5) score += 60;
-        else if (ageDays < 30) score += 25;
-        else if (ageDays < 90) score += 10;
-
-        if (sol < 1) score += 30;
-        else if (sol < 5) score += 15;
-
-        if (txs.length < 20) score += 20;
-
-        const safe = ageDays >= 5 && score < 50;
-
-        return {
-            score,
-            safe,
-            sol,
-            txCount: txs.length,
-            ageDays: ageDays.toFixed(2)
-        };
-
-    } catch {
-        return { score: 100, safe: false, ageDays: 0 };
-    }
-}
-
-// ==================== 3. AUTHORITY CHECK (REAL SETAUTHORITY PARSER) ====================
-
-async function checkAuthority(mintAddress) {
-    try {
-        const res = await axios.post(HELIUS_RPC, {
-            jsonrpc: "2.0",
-            id: 1,
-            method: "getSignaturesForAddress",
-            params: [mintAddress, { limit: 50 }]
-        }, { headers: HEADERS });
-
-        const signatures = res.data.result || [];
-
-        let mintRevoked = false;
-        let freezeRevoked = false;
-
-        for (let sig of signatures) {
-
-            const txRes = await axios.post(HELIUS_RPC, {
-                jsonrpc: "2.0",
-                id: 1,
-                method: "getTransaction",
-                params: [sig.signature, { maxSupportedTransactionVersion: 0 }]
-            }, { headers: HEADERS });
-
-            const logs = txRes.data?.result?.meta?.logMessages || [];
-            const text = logs.join(" ").toLowerCase();
-
-            if (text.includes("setauthority")) {
-
-                if (
-                    text.includes("minttokens") &&
-                    (text.includes("none") || text.includes("null"))
-                ) {
-                    mintRevoked = true;
-                }
-
-                if (
-                    text.includes("freezeaccount") &&
-                    (text.includes("none") || text.includes("null"))
-                ) {
-                    freezeRevoked = true;
-                }
-            }
-        }
-
-        return {
-            revoked: mintRevoked && freezeRevoked,
-            mintRevoked,
-            freezeRevoked
-        };
-
-    } catch {
-        return { revoked: false };
-    }
-}
-
-// ==================== 4. TOKEN SAFETY ====================
-
-function tokenSafe(name) {
-    const bad = ["100x", "moon", "pump", "rocket", "inu!!!"];
-    return !bad.some(b => name.toLowerCase().includes(b));
-}
-
-// ==================== 5. WAIT PHASE ====================
-
-async function waitPhase() {
-    log("⏳ WAITING 60 seconds for stabilization...");
-    await sleep(60000);
-}
-
-// ==================== MAIN PIPELINE ====================
-
-async function processToken(mint, name, creator) {
-
-    log(`🎯 Token detected: ${name}`);
-
-    // STEP 1: MUST BE GRADUATED
-    if (!(await isGraduated(mint))) return;
-
-    log("🚀 Graduated confirmed");
-
-    // STEP 2: WAIT
-    await waitPhase();
-
-    // STEP 3: DEV CHECK (5+ DAYS ENFORCED)
-    const dev = await devScore(creator);
-    if (!dev.safe) {
-        reject(`Dev unsafe | Age: ${dev.ageDays}d | Score: ${dev.score}`);
-        return;
-    }
-
-    // STEP 4: NAME CHECK
-    if (!tokenSafe(name)) {
-        reject("Bad token name");
-        return;
-    }
-
-    // STEP 5: AUTHORITY CHECK (REAL)
-    const auth = await checkAuthority(mint);
-    if (!auth.revoked) {
-        reject("Authorities NOT revoked");
-        return;
-    }
-
-    // FINAL ALERT
-    const msg =
-        `🚀 SAFE POST-GRADUATION TOKEN\n\n` +
-        `🏷️ ${name}\n` +
-        `📌 ${mint}\n\n` +
-        `🧠 Dev Age: ${dev.ageDays} days\n` +
-        `💰 Dev SOL: ${dev.sol.toFixed(2)}\n` +
-        `📊 TX: ${dev.txCount}\n\n` +
-        `🔥 ALL CHECKS PASSED\n` +
-        `https://dexscreener.com/solana/${mint}`;
-
-    await bot.sendMessage(TELEGRAM_CHAT_ID, msg);
-
-    log("📤 ALERT SENT");
-}
-
-// ==================== WS ====================
-
-function start() {
-    log("🚀 Bot starting...");
-
+function startPumpListener() {
     const ws = new WebSocket("wss://pumpportal.fun/api/data");
 
     ws.on("open", () => {
+        log("✅ Pump.fun connected");
         ws.send(JSON.stringify({ method: "subscribeNewToken" }));
     });
 
-    ws.on("message", async (data) => {
+    ws.on("message", (data) => {
         try {
             const e = JSON.parse(data.toString());
 
-            const mint = e.mint;
-            const creator = e.traderPublicKey;
-            const name = e.symbol || "UNKNOWN";
+            if (!e.mint) return;
 
-            if (!mint || seen.has(mint)) return;
-            seen.add(mint);
+            pumpTokens.set(e.mint, {
+                creator: e.traderPublicKey,
+                name: e.symbol || "UNKNOWN",
+                time: Date.now()
+            });
 
-            await processToken(mint, name, creator);
+            log(`📥 Pump token stored: ${e.symbol}`);
 
         } catch {}
     });
 
-    ws.on("close", () => {
-        log("Reconnecting...");
-        setTimeout(start, 5000);
+    ws.on("close", () => setTimeout(startPumpListener, 5000));
+}
+
+// ==================== VERIFY PUMP ORIGIN ====================
+
+function verifyPumpToken(mint) {
+    const t = pumpTokens.get(mint);
+
+    if (!t) return false;
+
+    const age = (Date.now() - t.time) / 1000;
+
+    return age < 1800; // 30 min
+}
+
+// ==================== DEV CHECK ====================
+
+async function devCheck(wallet) {
+    const res = await axios.post(HELIUS_RPC, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "getSignaturesForAddress",
+        params: [wallet, { limit: 100 }]
     });
+
+    const txs = res.data.result || [];
+
+    if (!txs.length) return { safe: false };
+
+    const ageDays =
+        ((txs[0].blockTime - txs[txs.length - 1].blockTime) * 1000) /
+        (1000 * 60 * 60 * 24);
+
+    if (ageDays < 5) return { safe: false };
+
+    return { safe: true, ageDays: ageDays.toFixed(1) };
+}
+
+// ==================== AUTHORITY CHECK ====================
+
+async function checkAuthority(mint) {
+    const res = await axios.post(HELIUS_RPC, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "getAccountInfo",
+        params: [mint, { encoding: "jsonParsed" }]
+    });
+
+    const info = res.data.result?.value?.data?.parsed?.info;
+
+    if (!info) return false;
+
+    return !info.mintAuthority; // simplified
+}
+
+// ==================== PROCESS TOKEN ====================
+
+async function processToken(mint, data) {
+
+    log(`🚀 Graduated: ${data.name}`);
+
+    await sleep(60000);
+
+    const dev = await devCheck(data.creator);
+    if (!dev.safe) return reject("Dev failed");
+
+    const auth = await checkAuthority(mint);
+    if (!auth) return reject("Authority fail");
+
+    await bot.sendMessage(
+        TELEGRAM_CHAT_ID,
+        `🚀 SAFE TOKEN\n\n${data.name}\n${mint}\n\nDev Age: ${dev.ageDays}d\nhttps://dexscreener.com/solana/${mint}`
+    );
+
+    log("📤 Alert sent");
+}
+
+// ==================== RAYDIUM LISTENER ====================
+
+function listenRaydium(programId) {
+
+    connection.onProgramAccountChange(programId, async (info) => {
+        try {
+            const key = info.accountId.toBase58();
+            if (seenPools.has(key)) return;
+            seenPools.add(key);
+
+            const data = info.accountInfo.data;
+
+            if (!data || data.length < 120) return;
+
+            const baseMint = new PublicKey(data.slice(72, 104)).toBase58();
+            const quoteMint = new PublicKey(data.slice(104, 136)).toBase58();
+
+            let token = null;
+
+            if (baseMint === SOL_MINT) token = quoteMint;
+            else if (quoteMint === SOL_MINT) token = baseMint;
+
+            if (!token) return;
+
+            log(`🔥 Pool detected (${programId.toBase58()})`);
+
+            if (!verifyPumpToken(token)) {
+                return reject("Not pump.fun token");
+            }
+
+            const meta = pumpTokens.get(token);
+
+            await processToken(token, meta);
+
+        } catch {}
+    });
+}
+
+// ==================== START ====================
+
+function start() {
+    log("🚀 Starting BOT V5...");
+
+    startPumpListener();
+
+    listenRaydium(AMM_V4);
+    listenRaydium(CLMM);
 }
 
 start();
