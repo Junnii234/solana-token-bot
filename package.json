@@ -1,7 +1,7 @@
 {
   "name": "bot",
-  "version": "4.0.0",
-  "description": "Elite Solana Token Scanner with Warm Wallet Detection",
+  "version": "5.0.0",
+  "description": "Elite Solana Token Scanner (Pump.fun + Raydium AMM V4 + CLMM)",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js",
@@ -10,20 +10,22 @@
   },
   "keywords": [
     "solana",
-    "token",
+    "pumpfun",
+    "raydium",
     "scanner",
     "telegram",
     "bot"
   ],
-  "author": "Your Name",
+  "author": "Junaid",
   "license": "MIT",
   "dependencies": {
+    "@solana/web3.js": "^1.95.3",
     "axios": "^1.7.4",
     "dotenv": "^16.4.5",
     "node-telegram-bot-api": "^0.65.0",
     "ws": "^8.16.0"
   },
   "engines": {
-    "node": "18.x"
+    "node": ">=18"
   }
 }
