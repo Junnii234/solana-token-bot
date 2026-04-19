@@ -5,39 +5,39 @@ const axios = require('axios');
 const WebSocket = require('ws');
 const { Connection, PublicKey } = require('@solana/web3.js');
 
-// ==================== CONFIG ====================
+// ================= CONFIG =================
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || "8758743414:AAGUbb0kA9fPMfU-diX7-lVVal7cxzOTqTM";
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || "8006731872";
 const HELIUS_RPC = process.env.HELIUS_RPC || "https://mainnet.helius-rpc.com/?api-key=cad2ea55-0ae1-4005-8b8a-3b04167a57fb";
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
-
 const connection = new Connection(HELIUS_RPC, "confirmed");
-
-// Raydium Programs
-const AMM_V4 = new PublicKey("RVKd61ztZW9s8y1zC2h9B6Pp2c7kwh28ykVfoUfH2Lr");
-const CLMM = new PublicKey("CAMMCzo5YL8w4VFF3i5nVjB6w3Vv4YFQj1h7Q9h3i6k"); // approx CLMM
 
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 
-// ==================== MEMORY ====================
+const RAYDIUM_PROGRAMS = [
+    "RVKd61ztZW9s8y1zC2h9B6Pp2c7kwh28ykVfoUfH2Lr", // AMM V4
+    "CAMMCzo5YL8w4VFF3i5nVjB6w3Vv4YFQj1h7Q9h3i6k"  // CLMM
+];
+
+// ================= MEMORY =================
 
 const pumpTokens = new Map();
-const seenPools = new Set();
+const processed = new Set();
 
-// ==================== LOGS ====================
+// ================= LOG =================
 
 const log = (m) => console.log(`[${new Date().toLocaleTimeString()}] ${m}`);
 const reject = (m) => console.log(`⚠️ ${m}`);
-
-// ==================== UTIL ====================
+const error = (m) => console.log(`❌ ${m}`);
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-// ==================== PUMP.FUN LISTENER ====================
+// ================= PUMP LISTENER =================
 
 function startPumpListener() {
+
     const ws = new WebSocket("wss://pumpportal.fun/api/data");
 
     ws.on("open", () => {
@@ -57,7 +57,7 @@ function startPumpListener() {
                 time: Date.now()
             });
 
-            log(`📥 Pump token stored: ${e.symbol}`);
+            log(`📥 Stored: ${e.symbol}`);
 
         } catch {}
     });
@@ -65,127 +65,151 @@ function startPumpListener() {
     ws.on("close", () => setTimeout(startPumpListener, 5000));
 }
 
-// ==================== VERIFY PUMP ORIGIN ====================
+// ================= VERIFY =================
 
 function verifyPumpToken(mint) {
     const t = pumpTokens.get(mint);
-
     if (!t) return false;
 
     const age = (Date.now() - t.time) / 1000;
-
-    return age < 1800; // 30 min
+    return age < 1800;
 }
 
-// ==================== DEV CHECK ====================
+// ================= DEV CHECK =================
 
 async function devCheck(wallet) {
-    const res = await axios.post(HELIUS_RPC, {
-        jsonrpc: "2.0",
-        id: 1,
-        method: "getSignaturesForAddress",
-        params: [wallet, { limit: 100 }]
-    });
+    try {
+        const res = await axios.post(HELIUS_RPC, {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "getSignaturesForAddress",
+            params: [wallet, { limit: 100 }]
+        });
 
-    const txs = res.data.result || [];
+        const txs = res.data.result || [];
 
-    if (!txs.length) return { safe: false };
+        if (!txs.length) return { safe: false };
 
-    const ageDays =
-        ((txs[0].blockTime - txs[txs.length - 1].blockTime) * 1000) /
-        (1000 * 60 * 60 * 24);
+        const ageDays =
+            ((txs[0].blockTime - txs[txs.length - 1].blockTime) * 1000) /
+            (1000 * 60 * 60 * 24);
 
-    if (ageDays < 5) return { safe: false };
+        return { safe: ageDays >= 5, ageDays: ageDays.toFixed(1) };
 
-    return { safe: true, ageDays: ageDays.toFixed(1) };
+    } catch {
+        return { safe: false };
+    }
 }
 
-// ==================== AUTHORITY CHECK ====================
+// ================= AUTHORITY =================
 
 async function checkAuthority(mint) {
-    const res = await axios.post(HELIUS_RPC, {
-        jsonrpc: "2.0",
-        id: 1,
-        method: "getAccountInfo",
-        params: [mint, { encoding: "jsonParsed" }]
-    });
+    try {
+        const res = await axios.post(HELIUS_RPC, {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "getAccountInfo",
+            params: [mint, { encoding: "jsonParsed" }]
+        });
 
-    const info = res.data.result?.value?.data?.parsed?.info;
+        const info = res.data.result?.value?.data?.parsed?.info;
 
-    if (!info) return false;
+        if (!info) return false;
 
-    return !info.mintAuthority; // simplified
+        return !info.mintAuthority;
+
+    } catch {
+        return false;
+    }
 }
 
-// ==================== PROCESS TOKEN ====================
+// ================= PROCESS =================
 
-async function processToken(mint, data) {
+async function processToken(mint, meta) {
 
-    log(`🚀 Graduated: ${data.name}`);
+    if (processed.has(mint)) return;
+    processed.add(mint);
+
+    log(`🚀 GRADUATED: ${meta.name}`);
 
     await sleep(60000);
 
-    const dev = await devCheck(data.creator);
-    if (!dev.safe) return reject("Dev failed");
+    const dev = await devCheck(meta.creator);
+    if (!dev.safe) return reject("Dev fail");
 
     const auth = await checkAuthority(mint);
     if (!auth) return reject("Authority fail");
 
     await bot.sendMessage(
         TELEGRAM_CHAT_ID,
-        `🚀 SAFE TOKEN\n\n${data.name}\n${mint}\n\nDev Age: ${dev.ageDays}d\nhttps://dexscreener.com/solana/${mint}`
+        `🚀 SAFE TOKEN\n\n${meta.name}\n${mint}\nDev Age: ${dev.ageDays}d\nhttps://dexscreener.com/solana/${mint}`
     );
 
-    log("📤 Alert sent");
+    log("📤 ALERT SENT");
 }
 
-// ==================== RAYDIUM LISTENER ====================
+// ================= RAYDIUM TX LISTENER =================
 
-function listenRaydium(programId) {
+function startRaydiumListener() {
 
-    connection.onProgramAccountChange(programId, async (info) => {
+    log("🚀 Raydium TX Listener Started");
+
+    connection.onLogs("all", async (logInfo) => {
         try {
-            const key = info.accountId.toBase58();
-            if (seenPools.has(key)) return;
-            seenPools.add(key);
 
-            const data = info.accountInfo.data;
+            const sig = logInfo.signature;
+            const logs = logInfo.logs.join(" ").toLowerCase();
 
-            if (!data || data.length < 120) return;
+            if (
+                !logs.includes("raydium") &&
+                !logs.includes("liquidity") &&
+                !logs.includes("initialize")
+            ) return;
 
-            const baseMint = new PublicKey(data.slice(72, 104)).toBase58();
-            const quoteMint = new PublicKey(data.slice(104, 136)).toBase58();
+            const tx = await connection.getParsedTransaction(sig, {
+                maxSupportedTransactionVersion: 0
+            });
 
-            let token = null;
+            if (!tx || tx.meta?.err) return;
 
-            if (baseMint === SOL_MINT) token = quoteMint;
-            else if (quoteMint === SOL_MINT) token = baseMint;
+            const instructions = tx.transaction.message.instructions;
 
-            if (!token) return;
+            for (let ix of instructions) {
 
-            log(`🔥 Pool detected (${programId.toBase58()})`);
+                const programId = ix.programId.toBase58();
 
-            if (!verifyPumpToken(token)) {
-                return reject("Not pump.fun token");
+                if (!RAYDIUM_PROGRAMS.includes(programId)) continue;
+
+                const accounts = ix.accounts.map(a => a.toBase58());
+
+                for (let acc of accounts) {
+
+                    if (acc === SOL_MINT) continue;
+                    if (acc.length < 32) continue;
+
+                    if (!verifyPumpToken(acc)) continue;
+
+                    const meta = pumpTokens.get(acc);
+
+                    log(`🔥 VERIFIED GRADUATION: ${meta.name}`);
+
+                    await processToken(acc, meta);
+                }
             }
 
-            const meta = pumpTokens.get(token);
-
-            await processToken(token, meta);
-
-        } catch {}
+        } catch (e) {
+            error(e.message);
+        }
     });
 }
 
-// ==================== START ====================
+// ================= START =================
 
 function start() {
-    log("🚀 Starting BOT V5...");
+    log("🚀 BOT V6 STARTED");
 
     startPumpListener();
-
-    listenRaydium(AMM_V4);
-    listenRaydium(CLMM);
+    startRaydiumListener();
 }
 
 start();
