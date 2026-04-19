@@ -16,117 +16,117 @@ const KNOWN_EXCHANGES = [
     "2AQdpHJ2JpcRs95vSBy3z8H1HSuXpQeJm8yZ87GidB4C"
 ];
 
-const pumpTokens = new Map();
 const processed = new Set();
-
-const log = (m) => console.log(`[${new Date().toLocaleTimeString()}] 🟢 ${m}`);
-const warn = (m) => console.log(`[${new Date().toLocaleTimeString()}] ⚠️ ${m}`);
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
-// ================= THE ENGINE (SAME FOR BOT & TEST) =================
 
 async function axiosWithRetry(config, retries = 0) {
     try {
-        await sleep(1500); 
+        await sleep(1200); // RPC rate limit safety
         return await axios.post(HELIUS_RPC, config);
     } catch (e) {
-        if (retries < 3) return axiosWithRetry(config, retries + 1);
+        if (retries < 2) return axiosWithRetry(config, retries + 1);
         throw e;
     }
 }
 
+// ================= CORE FORENSIC ENGINE (STRICT LOGIC) =================
+
 async function performFullForensic(mint) {
     try {
-        // 1. Fetch Creator & Pair Age (Blockchain First Scan)
-        const sigRes = await axiosWithRetry({ jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [mint, { limit: 1, oldestFirst: true }] });
-        const firstSig = sigRes.data.result[0];
-        if (!firstSig) return { error: "No history found" };
+        const now = Math.floor(Date.now() / 1000);
 
-        const txDetail = await axiosWithRetry({ jsonrpc: "2.0", id: 1, method: "getTransaction", params: [firstSig.signature, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed" }] });
+        // 1. Get Pair Age & Signature (Oldest First)
+        const pairSigs = await axiosWithRetry({ jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [mint, { limit: 1, oldestFirst: true }] });
+        const firstPairTx = pairSigs.data.result[0];
+        if (!firstPairTx) return { error: "Mint not found on-chain" };
+        
+        const pairAgeDays = Math.max(0, (now - firstPairTx.blockTime) / 86400).toFixed(1);
+
+        // 2. Extract Creator from the first transaction
+        const txDetail = await axiosWithRetry({ jsonrpc: "2.0", id: 1, method: "getTransaction", params: [firstPairTx.signature, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed" }] });
         const creator = txDetail.data.result?.transaction?.message?.accountKeys[0]?.pubkey;
-        const pairAgeDays = ((Math.floor(Date.now() / 1000) - firstSig.blockTime) / 86400).toFixed(1);
 
-        // 2. Check Authorities (Mint & Freeze)
+        // 3. Check Authorities (Mint & Freeze)
         const accInfo = await axiosWithRetry({ jsonrpc: "2.0", id: 1, method: "getAccountInfo", params: [mint, { encoding: "jsonParsed" }] });
         const info = accInfo.data.result?.value?.data?.parsed?.info;
         const authSafe = info && info.mintAuthority === null && info.freezeAuthority === null;
 
-        // 3. Dev Age & Funding Source
-        const devNew = await axiosWithRetry({ jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [creator, { limit: 1 }] });
-        const devOld = await axiosWithRetry({ jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [creator, { limit: 1, oldestFirst: true }] });
+        // 4. Dev Age Logic (Newest vs Oldest Signature)
+        const devNewSigs = await axiosWithRetry({ jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [creator, { limit: 1 }] });
+        const devOldSigs = await axiosWithRetry({ jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [creator, { limit: 1, oldestFirst: true }] });
         
-        const devAgeDays = ((devNew.data.result[0].blockTime - devOld.data.result[0].blockTime) / 86400).toFixed(1);
-        
-        const funderTx = await axiosWithRetry({ jsonrpc: "2.0", id: 1, method: "getTransaction", params: [devOld.data.result[0].signature, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed" }] });
-        const funder = funderTx.data.result?.transaction?.message?.accountKeys[0]?.pubkey;
+        const newestTime = devNewSigs.data.result[0]?.blockTime || now;
+        const oldestTime = devOldSigs.data.result[0]?.blockTime || newestTime;
+        const devAgeDays = Math.max(0, (newestTime - oldestTime) / 86400).toFixed(1);
+
+        // 5. Funding Source (Check if first TX was from CEX)
+        const firstDevTx = await axiosWithRetry({ jsonrpc: "2.0", id: 1, method: "getTransaction", params: [devOldSigs.data.result[0].signature, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed" }] });
+        const funder = firstDevTx.data.result?.transaction?.message?.accountKeys[0]?.pubkey;
         const isCEX = KNOWN_EXCHANGES.includes(funder);
 
-        return {
-            mint,
-            creator,
-            pairAgeDays,
-            devAgeDays,
-            authSafe,
-            isCEX,
-            pass: (parseFloat(devAgeDays) >= 90 || isCEX) && authSafe
-        };
+        // FINAL CRITERIA CHECK
+        const pass = (parseFloat(devAgeDays) >= 90 || isCEX) && authSafe;
+
+        return { mint, creator, pairAgeDays, devAgeDays, authSafe, isCEX, pass };
     } catch (e) {
-        return { error: e.message };
+        return { error: `Forensic Failed: ${e.message}` };
     }
 }
 
-// ================= INTERFACE =================
+// ================= TELEGRAM HANDLERS =================
 
-// 1. Manual Test
 bot.onText(/\/test (.+)/, async (msg, match) => {
     const mint = match[1].trim();
-    log(`MANUAL TEST INITIATED: ${mint}`);
-    bot.sendMessage(msg.chat.id, `🔍 Testing with Main Bot Logic...`);
-
+    bot.sendMessage(msg.chat.id, `🔎 **Deep Scanning:** \`${mint}\`...`, { parse_mode: 'Markdown' });
+    
     const res = await performFullForensic(mint);
-    if (res.error) return bot.sendMessage(msg.chat.id, `❌ Error: ${res.error}`);
+    if (res.error) return bot.sendMessage(msg.chat.id, `❌ **Error:** ${res.error}`);
 
-    let report = `📊 **BOT LOGIC TEST RESULT**\n\n`;
-    report += `Mint: \`${res.mint}\`\n`;
-    report += `Auth: ${res.authSafe ? "✅ Clean" : "❌ Risk"}\n`;
-    report += `Pair Age: ${res.pairAgeDays} days\n`;
-    report += `Dev Age: ${res.devAgeDays} days\n`;
-    report += `Funding: ${res.isCEX ? "✅ CEX" : "⚠️ Organic"}\n\n`;
-    report += `**Verdict:** ${res.pass ? "🚀 WILL ALERT" : "🚫 WILL REJECT"}`;
+    let report = `📊 **FORENSIC REPORT (V20)**\n\n`;
+    report += `**Mint:** \`${res.mint}\`\n`;
+    report += `**Auth:** ${res.authSafe ? "✅ Clean (M/F Revoked)" : "❌ Risk (Not Revoked)"}\n`;
+    report += `**Pair Age:** ${res.pairAgeDays} days\n`;
+    report += `**Dev Age:** ${res.devAgeDays} days\n`;
+    report += `**Funding:** ${res.isCEX ? "✅ CEX Funded" : "⚠️ Organic"}\n\n`;
+    report += `**Verdict:** ${res.pass ? "🚀 **PASS (Alerting)**" : "🚫 **FAIL (Filtering)**"}`;
 
     bot.sendMessage(msg.chat.id, report, { parse_mode: 'Markdown' });
 });
 
-// 2. Migration Listener (Main Bot Work)
+// ================= AUTO LISTENER =================
+
 function startMigrationListener() {
     const ws = new WebSocket("wss://pumpportal.fun/api/data");
     ws.on("open", () => {
-        log("Raydium Migration Listener LIVE");
+        console.log("🛡️ V20 Radar Online");
         ws.send(JSON.stringify({ method: "subscribeTokenTrade" }));
     });
 
     ws.on("message", async (data) => {
         const e = JSON.parse(data.toString());
         if (e.txType === 'raydium_migration') {
-            const mint = e.mint;
-            if (processed.has(mint)) return;
-            processed.add(mint);
+            if (processed.has(e.mint)) return;
+            processed.add(e.mint);
 
-            log(`⚡ NEW GRADUATE: ${mint}. Running Forensic...`);
-            await sleep(45000); // Wait for indexing
-
-            const res = await performFullForensic(mint);
+            console.log(`[MIGRATION] Detected: ${e.mint}`);
+            await sleep(45000); // Indexing wait
             
+            const res = await performFullForensic(e.mint);
             if (res.pass) {
-                bot.sendMessage(TELEGRAM_CHAT_ID, `🚀 **SAFE GRADUATE DETECTED**\n\nMint: \`${res.mint}\`\nDev Age: ${res.devAgeDays}d\nPair Age: ${res.pairAgeDays}d\nAuth: ✅ Clean\n\n[DexScreener](https://dexscreener.com/solana/${res.mint})`, { parse_mode: 'Markdown' });
-                log(`✅ ALERT SENT: ${res.mint}`);
-            } else {
-                warn(`REJECTED: ${res.mint} (Age: ${res.devAgeDays}d, Auth: ${res.authSafe})`);
+                bot.sendMessage(TELEGRAM_CHAT_ID, 
+                    `🚀 **SAFE GRADUATE DETECTED**\n\n` +
+                    `**Mint:** \`${res.mint}\`\n` +
+                    `**Dev Age:** ${res.devAgeDays}d\n` +
+                    `**Pair Age:** ${res.pairAgeDays}d\n` +
+                    `**Auth:** ✅ Clean\n\n` +
+                    `📈 [DexScreener](https://dexscreener.com/solana/${res.mint})`
+                , { parse_mode: 'Markdown' });
             }
         }
     });
+
     ws.on("close", () => setTimeout(startMigrationListener, 5000));
 }
 
 startMigrationListener();
-log("Scanner V18 Started - Dual-Logic Sync Active");
+console.log("BOT RUNNING - V20 - TOKEN ID UPDATED");
