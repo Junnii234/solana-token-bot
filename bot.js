@@ -17,7 +17,7 @@ const connection = new Connection(HELIUS_RPC, "confirmed");
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 
 const RAYDIUM_PROGRAMS = [
-    "RVKd61ztZW9s8y1zC2h9B6Pp2c7kwh28ykVfoUfH2Lr", // AMM V4
+    "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8", // CPMM
     "CAMMCzo5YL8w4VFF3i5nVjB6w3Vv4YFQj1h7Q9h3i6k"  // CLMM
 ];
 
@@ -194,9 +194,9 @@ function startRaydiumListener() {
             const logs = logInfo.logs.join(" ").toLowerCase();
 
             if (
-                !logs.includes("raydium") &&
+                !logs.includes("raydium_migration") &&
                 !logs.includes("liquidity") &&
-                !logs.includes("initialize")
+                !logs.includes("initialize2")
             ) return;
 
             const tx = await connection.getParsedTransaction(sig, {
