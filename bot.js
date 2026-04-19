@@ -4,22 +4,22 @@ const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const WebSocket = require('ws');
 
-// ================= CONFIG & PROGRAM IDS =================
+// ================= CONFIG & IDS =================
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || "8758743414:AAGUbb0kA9fPMfU-diX7-lVVal7cxzOTqTM";
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || "8006731872";
 const HELIUS_RPC = process.env.HELIUS_RPC || "https://mainnet.helius-rpc.com/?api-key=cad2ea55-0ae1-4005-8b8a-3b04167a57fb";
 
-const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
+const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
-// Yahan hain wo IDs jo aap dekhna chahte thay:
+// Program IDs for Manual Tracking
 const TARGET_PROGRAMS = {
     RAYDIUM_V4: "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
     RAYDIUM_CPMM: "CPMMoo8LqacR97B2yccS5qmoC69Y3Y847XwZfm7UTr5",
     RAYDIUM_CLMM: "CAMMCzo5YL8w4VFF3i5nVjB6w3Vv4YFQj1h7Q9h3i6k"
 };
 
-// CEX/Exchange Wallets for Bypass
+// CEX / Exchange Whitelist
 const KNOWN_EXCHANGES = [
     "AC5792X4AECZ5D8g1sTySrzMsh357AjC4STne6S5WCTM", // FixedFloat
     "5VCwS7pYArR3vR9FAnZp71qGoffS8W4P2ZidS9sYjZ6K", // Binance
@@ -27,26 +27,42 @@ const KNOWN_EXCHANGES = [
     "2AQdpHJ2JpcRs95vSBy3z8H1HSuXpQeJm8yZ87GidB4C"  // Coinbase
 ];
 
-// ================= MEMORY =================
-
+// Memory
 const pumpTokens = new Map();
 const processed = new Set();
 
 const log = (m) => console.log(`[${new Date().toLocaleTimeString()}] ${m}`);
-const reject = (m) => console.log(`[${new Date().toLocaleTimeString()}] ⚠️ ${m}`);
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-// ================= CORE LOGIC =================
+// ================= CORE TOOLS =================
 
 async function axiosWithRetry(config, retries = 0) {
     try {
-        await sleep(2000); 
+        await sleep(1500); 
         const res = await axios.post(HELIUS_RPC, config);
         return res;
     } catch (e) {
-        if (retries < 3) return axiosWithRetry(config, retries + 1);
+        if (retries < 2) return axiosWithRetry(config, retries + 1);
         throw e;
     }
+}
+
+// Function to find the funding source wallet
+async function getFunder(wallet) {
+    try {
+        const res = await axiosWithRetry({
+            jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress",
+            params: [wallet, { limit: 20 }] 
+        });
+        const txs = res.data.result || [];
+        if (!txs.length) return null;
+
+        const txDetail = await axiosWithRetry({
+            jsonrpc: "2.0", id: 1, method: "getTransaction",
+            params: [txs[txs.length - 1].signature, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed" }]
+        });
+        return txDetail.data.result?.transaction?.message?.accountKeys[0]?.pubkey;
+    } catch { return null; }
 }
 
 async function devCheck(wallet) {
@@ -56,24 +72,16 @@ async function devCheck(wallet) {
             params: [wallet, { limit: 100 }] 
         });
         const txs = res.data.result || [];
-        if (!txs.length) return { safe: false, reason: "No History" };
+        if (!txs.length) return { safe: false, type: "Unknown", age: 0 };
 
-        // 1. CEX Funding Check
-        const oldestSig = txs[txs.length - 1].signature;
-        const txDetail = await axiosWithRetry({
-            jsonrpc: "2.0", id: 1, method: "getTransaction",
-            params: [oldestSig, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed" }]
-        });
-        const funder = txDetail.data.result?.transaction?.message?.accountKeys[0]?.pubkey;
-        
+        const funder = await getFunder(wallet);
         if (KNOWN_EXCHANGES.includes(funder)) {
-            return { safe: true, reason: "CEX Funded", age: "CEX Trusted" };
+            return { safe: true, type: "CEX Funded", age: "Trusted" };
         }
-
-        // 2. 90-Day Age Check
+        
         const ageDays = ((txs[0].blockTime - txs[txs.length - 1].blockTime) * 1000) / (1000 * 60 * 60 * 24);
-        return { safe: ageDays >= 90, reason: "Organic", age: ageDays.toFixed(1) };
-    } catch (e) { return { safe: false, reason: "Forensic Error" }; }
+        return { safe: ageDays >= 90, type: "Organic", age: ageDays.toFixed(1) };
+    } catch { return { safe: false, type: "Error", age: 0 }; }
 }
 
 async function checkAuthorities(mint) {
@@ -83,88 +91,131 @@ async function checkAuthorities(mint) {
             params: [mint, { encoding: "jsonParsed" }]
         });
         const info = res.data.result?.value?.data?.parsed?.info;
+        // Mint aur Freeze dono null (revoked) honay chahye
         return info && info.mintAuthority === null && info.freezeAuthority === null;
-    } catch (e) { return false; }
+    } catch { return false; }
 }
 
-// ================= PROCESSING =================
+// ================= TELEGRAM COMMANDS =================
 
-async function processToken(mint, meta, programId) {
-    if (processed.has(mint)) return;
-    processed.add(mint);
+bot.onText(/\/test (.+)/, async (msg, match) => {
+    const chatId = msg.chat.id;
+    const mint = match[1].trim();
+    bot.sendMessage(chatId, `🔍 Testing Mint: \`${mint}\`...`, { parse_mode: 'Markdown' });
 
-    // Identifiying which program was used
-    let pName = "Unknown";
-    if (programId === TARGET_PROGRAMS.RAYDIUM_V4) pName = "Raydium V4";
-    if (programId === TARGET_PROGRAMS.RAYDIUM_CPMM) pName = "Raydium CPMM";
-    if (programId === TARGET_PROGRAMS.RAYDIUM_CLMM) pName = "Raydium CLMM";
+    const auth = await checkAuthorities(mint);
+    const storedData = pumpTokens.get(mint);
+    
+    let report = `📊 **SCAN REPORT**\n\n`;
+    report += `Mint: \`${mint}\`\n`;
+    report += `Authorities: ${auth ? "✅ Clean (Mint/Freeze Revoked)" : "❌ Risk (Not Revoked)"}\n`;
+    
+    if (storedData) {
+        const dev = await devCheck(storedData.creator);
+        report += `Dev Trust: ${dev.type}\n`;
+        report += `Dev Age: ${dev.age} ${dev.age === 'Trusted' ? '' : 'days'}\n`;
+    } else {
+        report += `\n⚠️ Dev details not in memory. Bot only tracks tokens launched while it was running.`;
+    }
 
-    log(`🔥 GRADUATION: ${meta.name} on ${pName}`);
-    await sleep(60000); 
+    bot.sendMessage(chatId, report, { parse_mode: 'Markdown' });
+});
 
-    const dev = await devCheck(meta.creator);
-    if (!dev.safe) return reject(`REJECTED: ${meta.name} (Age: ${dev.age}d)`);
+// ================= MAIN LISTENERS =================
 
-    const authSafe = await checkAuthorities(mint);
-    if (!authSafe) return reject(`REJECTED: ${meta.name} (Authority Risk)`);
-
-    await bot.sendMessage(TELEGRAM_CHAT_ID, 
-        `🚀 **GRADUATE DETECTED** 🚀\n\n` +
-        `🏷️ **Token:** ${meta.name}\n` +
-        `🏗️ **Pool:** ${pName}\n` +
-        `🛡️ **Dev Trust:** ${dev.reason} (${dev.age}d)\n` +
-        `✅ **Security:** Mint/Freeze Revoked\n\n` +
-        `📈 [DexScreener](https://dexscreener.com/solana/${mint})`
-    , { parse_mode: 'Markdown' });
-}
-
-// ================= LISTENERS =================
-
+// 1. Monitor New Launches for Early CEX Alerts
 function startPumpListener() {
     const ws = new WebSocket("wss://pumpportal.fun/api/data");
     ws.on("open", () => {
-        log("✅ Pump.fun Monitor Connected");
+        log("✅ Monitoring Pump.fun Launches");
         ws.send(JSON.stringify({ method: "subscribeNewToken" }));
     });
-    ws.on("message", (data) => {
+
+    ws.on("message", async (data) => {
         try {
             const e = JSON.parse(data.toString());
-            if (e.mint) pumpTokens.set(e.mint, { creator: e.traderPublicKey, name: e.symbol, time: Date.now() });
+            if (e.mint) {
+                // Store in memory for later migration check
+                pumpTokens.set(e.mint, { 
+                    creator: e.traderPublicKey, 
+                    name: e.symbol || "UNKNOWN", 
+                    time: Date.now() 
+                });
+
+                // EARLY ALERT: Check if funded by CEX
+                const funder = await getFunder(e.traderPublicKey);
+                if (KNOWN_EXCHANGES.includes(funder)) {
+                    bot.sendMessage(TELEGRAM_CHAT_ID, 
+                        `🌟 **EARLY GEM ALERT (CEX FUNDED)**\n\n` +
+                        `Token: ${e.symbol}\n` +
+                        `Mint: \`${e.mint}\`\n` +
+                        `Source: ${funder.slice(0,6)}... (Trusted Exchange) ✅\n\n` +
+                        `📈 [DexScreener](https://dexscreener.com/solana/${e.mint})`
+                    , { parse_mode: 'Markdown' });
+                }
+            }
         } catch {}
     });
+
     ws.on("close", () => setTimeout(startPumpListener, 5000));
 }
 
+// 2. Monitor Migrations to Raydium (V4/CPMM/CLMM)
 function startMigrationListener() {
-    log("🚀 Raydium Radar Active (Manual ID Filtering)");
+    log("🚀 Raydium Radar V12 Active (V4/CPMM/CLMM)");
     const ws = new WebSocket("wss://pumpportal.fun/api/data");
     ws.on("open", () => ws.send(JSON.stringify({ method: "subscribeTokenTrade" })));
 
     ws.on("message", async (data) => {
         try {
             const e = JSON.parse(data.toString());
-            // Program ID based filtering
             if (e.txType === 'raydium_migration') {
                 const mint = e.mint;
-                const t = pumpTokens.get(mint);
-                
-                if (t && (Date.now() - t.time) / 1000 <= 1800) {
-                    // Yahan hum determine karte hain konsi ID use hui hai
-                    // Note: PumpPortal migration event automatically targets Raydium programs
-                    await processToken(mint, t, e.programId || TARGET_PROGRAMS.RAYDIUM_V4);
+                const tokenData = pumpTokens.get(mint);
+
+                // Wait for migration to complete and check if in 30-min window
+                if (tokenData && (Date.now() - tokenData.time) / 1000 <= 1800) {
+                    if (processed.has(mint)) return;
+                    
+                    log(`🔥 Graduation: ${tokenData.name}`);
+                    await sleep(60000); // 1-minute safety wait
+
+                    const dev = await devCheck(tokenData.creator);
+                    const authSafe = await checkAuthorities(mint);
+
+                    if (dev.safe && authSafe) {
+                        processed.add(mint);
+                        
+                        // Determine Pool Type for the alert
+                        let poolType = "Raydium";
+                        if (e.programId === TARGET_PROGRAMS.RAYDIUM_CPMM) poolType = "Raydium CPMM";
+                        else if (e.programId === TARGET_PROGRAMS.RAYDIUM_CLMM) poolType = "Raydium CLMM";
+                        else poolType = "Raydium V4";
+
+                        bot.sendMessage(TELEGRAM_CHAT_ID, 
+                            `🚀 **SAFE GRADUATE DETECTED**\n\n` +
+                            `🏷️ **Token:** ${tokenData.name}\n` +
+                            `🏗️ **Pool:** ${poolType}\n` +
+                            `🛡️ **Dev:** ${dev.type} (${dev.age}d)\n` +
+                            `✅ **Security:** Mint & Freeze Revoked\n\n` +
+                            `📈 [DexScreener](https://dexscreener.com/solana/${mint})`
+                        , { parse_mode: 'Markdown' });
+                    }
                 }
             }
         } catch (err) {}
     });
+
     ws.on("close", () => setTimeout(startMigrationListener, 5000));
 }
 
+// ================= START =================
+
 function start() {
-    log("🛡️ SCANNER V10.0 LIVE");
     startPumpListener();
     startMigrationListener();
-    
-    // Clear old memory every 30 mins
+
+    // Memory cleanup: Delete tokens older than 1 hour
     setInterval(() => {
         const now = Date.now();
         for (let [mint, data] of pumpTokens.entries()) {
