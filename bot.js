@@ -4,150 +4,114 @@ const axios = require('axios');
 const WebSocket = require('ws');
 
 // ==================== CONFIG ====================
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || "8758743414:AAEKc_ORnq15WQHIR1jbKqh7psZfUcSCAcQ";
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || "8006731872";
-const HELIUS_RPC = process.env.HELIUS_RPC || `https://mainnet.helius-rpc.com/?api-key=cad2ea55-0ae1-4005-8b8a-3b04167a57fb`;
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+const HELIUS_RPC = process.env.HELIUS_RPC;
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
-const alertedMints = new Set();
+
 const HEADERS = { 'Content-Type': 'application/json' };
+const alertedMints = new Set();
 
-const log = (msg) => console.log(`[${new Date().toLocaleTimeString()}] 🟢 ${msg}`);
-const error = (msg) => console.error(`[${new Date().toLocaleTimeString()}] ❌ ${msg}`);
-const reject = (reason) => console.log(`[${new Date().toLocaleTimeString()}] ⚠️ REJECT: ${reason}`);
+// ==================== SIMPLE CACHE (IMPORTANT) ====================
+const cache = new Map();
 
+// ==================== RATE LIMITER (FIX 429) ====================
+let lastRequest = 0;
 
-// ==================== DEV HISTORY ====================
-async function getDevTokenHistory(creator) {
-    const url = `https://frontend-api.pump.fun/coins/user-created-coins/${creator}`;
+async function rateLimit() {
+    const now = Date.now();
+    const diff = now - lastRequest;
 
-    // helper retry function
-    const fetchData = async (attempt = 1) => {
-        try {
-            const res = await axios.get(url, {
-                timeout: 10000,
-                headers: {
-                    'User-Agent': 'Mozilla/5.0',
-                    'Accept': 'application/json'
-                }
-            });
-
-            return res.data || [];
-        } catch (e) {
-            error(`Dev History Attempt ${attempt} Failed: ${e.message}`);
-
-            // retry once only
-            if (attempt < 2) {
-                log(`🔁 Retrying Dev History...`);
-                return await fetchData(attempt + 1);
-            }
-
-            return []; // safe fallback
-        }
-    };
-
-    return await fetchData();
-}
-
-// ==================== DEV SCORING ====================
-
-function analyzeDevHistory(tokens) {
-    let rugs = 0;
-    let successful = 0;
-    let total = tokens.length;
-
-    tokens.forEach(t => {
-        if (t.complete) successful++;
-        else rugs++;
-    });
-
-    let score = 0;
-
-    if (successful >= 3) score += 3;
-    else if (successful >= 1) score += 1;
-
-    if (rugs > successful) score -= 2;
-
-    return {
-        total,
-        rugs,
-        successful,
-        score
-    };
-}
-
-
-// ==================== PROGRAM DIVERSITY CHECK ====================
-
-async function getProgramDiversity(signatures) {
-    const programSet = new Set();
-    for (const sig of signatures.slice(0, 10)) {
-        try {
-            const txRes = await axios.post(HELIUS_RPC, {
-                jsonrpc: "2.0", id: 1,
-                method: "getTransaction",
-                params: [sig, { encoding: "json" }]
-            }, { headers: HEADERS, timeout: 8000 });
-
-            const instructions = txRes.data.result?.transaction?.message?.instructions || [];
-            instructions.forEach(ix => {
-                if (ix.programId) programSet.add(ix.programId);
-            });
-        } catch (e) {
-            error(`Program Diversity Fetch Error: ${e.message}`);
-        }
+    if (diff < 400) {
+        await new Promise(res => setTimeout(res, 400 - diff));
     }
-    return programSet.size;
+
+    lastRequest = Date.now();
 }
 
+// ==================== LOGS ====================
+const log = (msg) => console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
+const error = (msg) => console.error(`[${new Date().toLocaleTimeString()}] ❌ ${msg}`);
 
-// ==================== STEP-WISE WARM WALLET DETECTION ====================
+// ==================== HELPER REQUEST (SAFE WRAPPER) ====================
+async function rpcCall(payload, retries = 2) {
+    await rateLimit();
 
-async function getOnChainDevStats(wallet) {
     try {
-        const res = await axios.post(HELIUS_RPC, {
+        const res = await axios.post(HELIUS_RPC, payload, {
+            headers: HEADERS,
+            timeout: 10000
+        });
+
+        return res.data;
+    } catch (e) {
+        if (retries > 0) {
+            log(`🔁 Retry RPC...`);
+            await new Promise(r => setTimeout(r, 800));
+            return rpcCall(payload, retries - 1);
+        }
+
+        throw e;
+    }
+}
+
+// ==================== ON-CHAIN DEV STATS ====================
+async function getOnChainDevStats(wallet) {
+
+    if (cache.has(wallet)) return cache.get(wallet);
+
+    try {
+        const sigRes = await rpcCall({
             jsonrpc: "2.0",
             id: 1,
             method: "getSignaturesForAddress",
-            params: [wallet, { limit: 1000 }]
-        }, { headers: HEADERS, timeout: 10000 });
+            params: [wallet, { limit: 80 }]
+        });
 
-        const txs = res.data.result || [];
+        const txs = sigRes.result || [];
 
         let tokenCreations = 0;
         let programSet = new Set();
 
-        for (const tx of txs.slice(0, 200)) {
+        for (const tx of txs.slice(0, 40)) {
+
             try {
-                const detail = await axios.post(HELIUS_RPC, {
+                const detail = await rpcCall({
                     jsonrpc: "2.0",
                     id: 1,
                     method: "getTransaction",
                     params: [tx.signature, { encoding: "json" }]
-                }, { headers: HEADERS, timeout: 8000 });
+                });
 
-                const instructions = detail.data.result?.transaction?.message?.instructions || [];
+                const instructions = detail.result?.transaction?.message?.instructions || [];
 
                 for (const ix of instructions) {
                     if (ix.programId) programSet.add(ix.programId);
 
-                    // token mint pattern detection
-                    if (ix.parsed?.type === "initializeMint" ||
-                        ix.parsed?.type === "createAccount") {
+                    if (
+                        ix.parsed?.type === "initializeMint" ||
+                        ix.parsed?.type === "createAccount"
+                    ) {
                         tokenCreations++;
                     }
                 }
+
             } catch {}
         }
 
-        return {
+        const result = {
             txCount: txs.length,
             tokenCreations,
             programDiversity: programSet.size
         };
 
+        cache.set(wallet, result);
+        return result;
+
     } catch (e) {
-        error(`On-chain Dev Stats Error: ${e.message}`);
+        error(`Dev Stats Error: ${e.message}`);
+
         return {
             txCount: 0,
             tokenCreations: 0,
@@ -156,227 +120,121 @@ async function getOnChainDevStats(wallet) {
     }
 }
 
+// ==================== WARM WALLET CHECK ====================
+async function checkWarmWallet(wallet) {
 
-async function checkWarmWallet(creator) {
     try {
-        log(`   🔍 Deep Scan Dev: ${creator.slice(0, 10)}...`);
-        
-        const now = Math.floor(Date.now() / 1000);
-        let lastSignature = null;
-        let walletAgeDays = 0;
-        let historyFound = false;
-        let totalTxs = 0;
-        let birthTime = null;
-        let signatures = [];
+        const balanceRes = await rpcCall({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "getBalance",
+            params: [wallet]
+        });
 
-        // Step 1: Age Check
-        for (let i = 0; i < 5; i++) {
-            const params = [creator, { limit: 1000 }];
-            if (lastSignature) params[1].before = lastSignature;
+        const balance = (balanceRes.result?.value || 0) / 1e9;
 
-            const res = await axios.post(HELIUS_RPC, {
-                jsonrpc: "2.0", id: 1, 
-                method: "getSignaturesForAddress", 
-                params: params
-            }, { headers: HEADERS, timeout: 8000 });
+        const dev = await getOnChainDevStats(wallet);
 
-            const txs = res.data.result;
-            if (!txs || txs.length === 0) break; 
+        // SCORE SYSTEM
+        let score = 0;
 
-            historyFound = true;
-            totalTxs += txs.length;
-            signatures.push(...txs.map(t => t.signature));
+        if (dev.txCount > 200) score += 1;
+        if (dev.tokenCreations >= 1) score += 2;
+        if (dev.programDiversity > 3) score += 1;
+        if (balance > 1) score += 1;
 
-            const oldestTxInBatch = txs[txs.length - 1]; 
-            lastSignature = oldestTxInBatch.signature;
-            birthTime = oldestTxInBatch.blockTime || now;
-            walletAgeDays = (now - birthTime) / 86400;
-
-            if (walletAgeDays >= 10) break;
-            if (txs.length < 1000) break;
+        if (dev.tokenCreations === 0) {
+            return { warm: false, reason: "No token creation history" };
         }
 
-        if (!historyFound) {
-            reject(`No history found on blockchain`);
-            return { warm: false };
+        if (score <= 1) {
+            return { warm: false, reason: "Low dev score" };
         }
 
-        if (walletAgeDays < 10) {
-            reject(`Age: ${walletAgeDays.toFixed(1)}d (need 10+)`);
-            return { warm: false };
-        }
-
-        // Step 2: Balance Check
-        const balanceRes = await axios.post(HELIUS_RPC, {
-            jsonrpc: "2.0", id: 1, method: "getBalance", params: [creator]
-        }, { headers: HEADERS, timeout: 5000 });
-
-        const balanceSol = (balanceRes.data.result.value || 0) / 1e9;
-        if (balanceSol < 2) {
-            reject(`Balance: ${balanceSol.toFixed(2)}SOL (need 2+)`);
-            return { warm: false };
-        }
-
-        // ==================== NEW: DEV HISTORY CHECK ====================
-
-        const devStats = await getOnChainDevStats(creator);
-
-// scoring system
-let score = 0;
-
-if (devStats.txCount > 300) score += 1;
-if (devStats.tokenCreations >= 2) score += 2;
-if (devStats.programDiversity > 3) score += 1;
-
-if (devStats.tokenCreations === 0) {
-    reject("No token creation history ❌");
-    return { warm: false };
-}
-
-if (score <= 1) {
-    reject(`Low dev score: ${score} ❌`);
-    return { warm: false };
-}
-
-        if (devStats.total === 0) {
-            reject("No dev history found ❌");
-            return { warm: false };
-        }
-
-        if (devStats.successful === 0) {
-            reject(`0 successful tokens (Rugs: ${devStats.rugs}) ❌`);
-            return { warm: false };
-        }
-
-        if (devStats.score <= 0) {
-            reject(`Bad dev score: ${devStats.score} ❌`);
-            return { warm: false };
-        }
-
-        // Step 3: Transaction Count
-        if (totalTxs < 200) {
-            reject(`Tx Count: ${totalTxs} (need 200+)`);
-            return { warm: false };
-        }
-
-        // Step 4: Program Diversity
-        const programCount = await getProgramDiversity(signatures);
-        let diversityNote = programCount > 0 
-            ? `Program Diversity: ${programCount} ✅`
-            : `Program Diversity: 0 ⚠️`;
-
-        const birthDate = new Date(birthTime * 1000);
-
-        log(`   ✅ WARM + GOOD DEV: ${walletAgeDays.toFixed(1)}d | Score: ${devStats.score}`);
-
-        return { 
+        return {
             warm: true,
-            age: walletAgeDays.toFixed(1),
-            balance: balanceSol.toFixed(2),
-            txCount: totalTxs,
-            firstTx: birthDate.toISOString(),
-            programCount,
-            diversityNote,
-            devStats
+            balance,
+            dev,
+            score
         };
 
     } catch (e) {
-        error(`Logic Error: ${e.message}`);
+        error(`Warm check error: ${e.message}`);
         return { warm: false };
     }
 }
 
-
 // ==================== TELEGRAM COMMAND ====================
-
 bot.onText(/\/check (.+)/, async (msg, match) => {
-    const chatId = msg.chat.id;
-    let mint = match[1].trim();
 
-    if (mint.endsWith("pump")) {
-        mint = mint.replace("pump", "");
-    }
+    const chatId = msg.chat.id;
+    const mint = match[1];
 
     try {
-        log(`🔎 Manual Check: ${mint}`);
 
-        let res;
-        try {
-            res = await axios.get(`https://api.pump.fun/metadata/${mint}`);
-        } catch {
-            bot.sendMessage(chatId, `⚠️ Pump API down, using fallback`);
-            res = { data: {} };
+        const creator = mint; // fallback logic
+
+        const result = await checkWarmWallet(creator);
+
+        if (!result.warm) {
+            return bot.sendMessage(chatId, `❌ Rejected: ${result.reason}`);
         }
 
-        const creator = res.data?.creator || mint;
-        const name = res.data?.symbol || "Unknown";
-
-        const walletCheck = await checkWarmWallet(creator);
-
-        if (walletCheck.warm) {
-            const report = 
-                `🌟 REAL DEV DETECTED 🌟\n\n` +
-                `Token: ${name}\n` +
-                `Mint: ${mint}\n\n` +
-
-                `DEV HISTORY:\n` +
-                `• Total: ${walletCheck.devStats.total}\n` +
-                `• Successful: ${walletCheck.devStats.successful}\n` +
-                `• Rugs: ${walletCheck.devStats.rugs}\n` +
-                `• Score: ${walletCheck.devStats.score}\n\n` +
-
-                `Wallet Age: ${walletCheck.age} days\n` +
-                `Balance: ${walletCheck.balance} SOL\n`;
-
-            bot.sendMessage(chatId, report);
-
-        } else {
-            bot.sendMessage(chatId, `❌ Rejected`);
-        }
+        bot.sendMessage(chatId,
+            `🔥 WARM DEV DETECTED\n\n` +
+            `Score: ${result.score}\n` +
+            `Balance: ${result.balance} SOL\n` +
+            `TX: ${result.dev.txCount}\n` +
+            `Creations: ${result.dev.tokenCreations}\n` +
+            `Diversity: ${result.dev.programDiversity}`
+        );
 
     } catch (e) {
-        bot.sendMessage(chatId, `Error`);
+        bot.sendMessage(chatId, `Error: ${e.message}`);
     }
 });
 
+// ==================== WS MONITOR ====================
+function startWS() {
 
-// ==================== AUTO MONITOR ====================
-
-function monitorPumpFun() {
     const ws = new WebSocket('wss://pumpportal.fun/api/data');
 
     ws.on('open', () => {
         ws.send(JSON.stringify({ method: "subscribeNewToken" }));
+        log("WS connected");
     });
 
     ws.on('message', async (data) => {
+
         try {
-            const event = JSON.parse(data.toString());
+            const event = JSON.parse(data);
+
             const mint = event.mint;
             const creator = event.traderPublicKey;
 
             if (!mint || alertedMints.has(mint)) return;
             alertedMints.add(mint);
 
-            const walletCheck = await checkWarmWallet(creator);
+            const result = await checkWarmWallet(creator);
 
-            if (walletCheck.warm) {
+            if (result.warm) {
                 bot.sendMessage(TELEGRAM_CHAT_ID,
-                    `🔥 GOOD DEV TOKEN\nScore: ${walletCheck.devStats.score}\nMint: ${mint}`
+                    `🚀 NEW GOOD DEV TOKEN\nScore: ${result.score}\nMint: ${mint}`
                 );
             }
 
         } catch {}
     });
-}
 
+    ws.on('close', () => {
+        log("WS closed, reconnecting...");
+        setTimeout(startWS, 5000);
+    });
+}
 
 // ==================== START ====================
-
-function startup() {
+(function start() {
     console.clear();
-    log("🚀 BOT STARTED WITH DEV SCORING");
-    monitorPumpFun();
-}
-
-startup();
+    log("🚀 BOT STARTED (FIXED VERSION)");
+    startWS();
+})();
