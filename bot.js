@@ -20,7 +20,7 @@ const reject = (reason) => console.log(`[${new Date().toLocaleTimeString()}] ⚠
 
 async function getProgramDiversity(signatures) {
     const programSet = new Set();
-    for (const sig of signatures.slice(0, 10)) { // limit to 10 txs for efficiency
+    for (const sig of signatures.slice(0, 10)) {
         try {
             const txRes = await axios.post(HELIUS_RPC, {
                 jsonrpc: "2.0", id: 1,
@@ -76,7 +76,7 @@ async function checkWarmWallet(creator) {
             birthTime = oldestTxInBatch.blockTime || now;
             walletAgeDays = (now - birthTime) / 86400;
 
-            if (walletAgeDays >= 270) break; // 9 months threshold
+            if (walletAgeDays >= 270) break;
             if (txs.length < 1000) break;
         }
 
@@ -107,51 +107,53 @@ async function checkWarmWallet(creator) {
             return { warm: false };
         }
 
-        // Step 4: Program Diversity
+        // Step 4: Program Diversity (relaxed)
         const programCount = await getProgramDiversity(signatures);
-        if (programCount < 3) {
-            reject(`Program Diversity: ${programCount} (need 3+)`);
-            return { warm: false };
+        let diversityNote = "";
+        if (programCount > 0) {
+            diversityNote = `Program Diversity: ${programCount} ✅ Very Good`;
+        } else {
+            diversityNote = `Program Diversity: 0 ⚠️ No diversity detected (not strict filter)`;
         }
 
-        // Log First Transaction Date
         const birthDate = new Date(birthTime * 1000);
         log(`📅 First Transaction: ${birthDate.toISOString()}`);
 
-        log(`   ✅ WARM WALLET VERIFIED: ${walletAgeDays.toFixed(1)} days old | ${totalTxs} txs | ${programCount} programs`);
-        return { warm: true, age: walletAgeDays.toFixed(1), balance: balanceSol.toFixed(2), txCount: totalTxs, firstTx: birthDate.toISOString(), programCount };
+        log(`   ✅ WARM WALLET VERIFIED: ${walletAgeDays.toFixed(1)} days old | ${totalTxs} txs | ${diversityNote}`);
+        return { warm: true, age: walletAgeDays.toFixed(1), balance: balanceSol.toFixed(2), txCount: totalTxs, firstTx: birthDate.toISOString(), programCount, diversityNote };
 
     } catch (e) {
         error(`Logic Error: ${e.message}`);
         return { warm: false };
     }
-}
+    }
 
 // ==================== TELEGRAM COMMAND ====================
 
 bot.onText(/\/check (.+)/, async (msg, match) => {
     const chatId = msg.chat.id;
-    const mint = match[1].trim();
+    let mint = match[1].trim();
+
+    // Auto-remove 'pump' suffix if present
+    if (mint.endsWith("pump")) {
+        mint = mint.replace("pump", "");
+    }
 
     try {
         log(`🔎 Manual Check Requested for Mint: ${mint}`);
 
-        // Mint info fetch with error handling
         let res;
         try {
+            // Try Pump.fun API
             res = await axios.get(`https://api.pump.fun/metadata/${mint}`);
         } catch (e) {
-            bot.sendMessage(chatId, `⚠️ Pump.fun API unavailable. Try again later or check mint format.`);
-            return;
+            // Fallback if Pump.fun API fails
+            bot.sendMessage(chatId, `⚠️ Pump.fun API unavailable. Blockchain metrics only will be checked.`);
+            res = { data: {} };
         }
 
-        const creator = res.data?.creator || null;
+        const creator = res.data?.creator || mint; // fallback to mint itself
         const name = res.data?.symbol || "Unknown";
-
-        if (!creator) {
-            bot.sendMessage(chatId, `❌ Creator not found for mint: ${mint}`);
-            return;
-        }
 
         const walletCheck = await checkWarmWallet(creator);
 
@@ -164,12 +166,16 @@ bot.onText(/\/check (.+)/, async (msg, match) => {
                 `• Wallet Age: ${walletCheck.age} days\n` +
                 `• Balance: ${walletCheck.balance} SOL\n` +
                 `• Tx Count: ${walletCheck.txCount}\n` +
-                `• Program Diversity: ${walletCheck.programCount}\n` +
+                `• ${walletCheck.diversityNote}\n` +
                 `• First Tx: ${walletCheck.firstTx}\n\n` +
                 `💰 [Pump.Fun](https://pump.fun/${mint})\n` +
                 `📊 [DexScreener](https://dexscreener.com/solana/${mint})`;
 
-            bot.sendMessage(chatId, report, { parse_mode: 'Markdown', disable_web_page_preview: true });
+            bot.sendMessage(chatId, report, { 
+                parse_mode: 'Markdown', 
+                disable_web_page_preview: true 
+            });
+
         } else {
             bot.sendMessage(chatId, `⚠️ Wallet did not meet warm criteria for mint: ${mint}`);
         }
@@ -179,6 +185,8 @@ bot.onText(/\/check (.+)/, async (msg, match) => {
         bot.sendMessage(chatId, `❌ Error checking mint: ${e.message}`);
     }
 });
+
+
 
 // ==================== AUTO MONITORING ====================
 
@@ -205,7 +213,7 @@ function monitorPumpFun() {
             const walletCheck = await checkWarmWallet(creator);
 
             if (walletCheck.warm) {
-                const report = 
+                const report =
                     `🌟 **REAL DEV - VERIFIED** 🌟\n\n` +
                     `🏷️ **Token:** ${name}\n` +
                     `📋 **Mint:** \`${mint}\`\n\n` +
@@ -213,16 +221,19 @@ function monitorPumpFun() {
                     `• Wallet Age: ${walletCheck.age} days\n` +
                     `• Balance: ${walletCheck.balance} SOL\n` +
                     `• Tx Count: ${walletCheck.txCount}\n` +
-                    `• Program Diversity: ${walletCheck.programCount}\n` +
+                    `• ${walletCheck.diversityNote}\n` +
                     `• First Tx: ${walletCheck.firstTx}\n\n` +
                     `💰 [Pump.Fun](https://pump.fun/${mint})\n` +
                     `📊 [DexScreener](https://dexscreener.com/solana/${mint})`;
 
-                await bot.sendMessage(TELEGRAM_CHAT_ID, report, { 
+                await bot.sendMessage(TELEGRAM_CHAT_ID, report, {
                     parse_mode: 'Markdown',
                     disable_web_page_preview: true
                 });
+            } else {
+                log(`⚠️ Wallet did NOT meet warm criteria — skipping alert.`);
             }
+
         } catch (e) {
             error(`Event Processing Error: ${e.message}`);
         }
@@ -245,8 +256,8 @@ async function startup() {
     console.clear();
     console.log(`
 ╔════════════════════════════════════════════════════════════╗
-║  🚀 V30.0 - STEP-WISE FORENSIC MONITOR                     ║
-║  🔥 Real Dev Detection (270+d, 2+SOL, 200+Txs, 3+Programs) ║
+║  🚀 V31.0 - STEP-WISE FORENSIC MONITOR                     ║
+║  🔥 Real Dev Detection (270+d, 2+SOL, 200+Txs, Relaxed PD) ║
 ║  ⚡ Powered by PumpPortal & Helius                         ║
 ╚════════════════════════════════════════════════════════════╝
     `);
@@ -257,5 +268,3 @@ async function startup() {
 }
 
 startup();
-
-
