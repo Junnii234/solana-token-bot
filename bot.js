@@ -16,6 +16,29 @@ const log = (msg) => console.log(`[${new Date().toLocaleTimeString()}] 🟢 ${ms
 const error = (msg) => console.error(`[${new Date().toLocaleTimeString()}] ❌ ${msg}`);
 const reject = (reason) => console.log(`[${new Date().toLocaleTimeString()}] ⚠️  REJECT: ${reason}`);
 
+// ==================== PROGRAM DIVERSITY CHECK ====================
+
+async function getProgramDiversity(wallet, signatures) {
+    const programSet = new Set();
+    for (const sig of signatures.slice(0, 10)) { // limit to 10 txs for efficiency
+        try {
+            const txRes = await axios.post(HELIUS_RPC, {
+                jsonrpc: "2.0", id: 1,
+                method: "getTransaction",
+                params: [sig, { encoding: "json" }]
+            }, { headers: HEADERS, timeout: 8000 });
+
+            const instructions = txRes.data.result?.transaction?.message?.instructions || [];
+            instructions.forEach(ix => {
+                if (ix.programId) programSet.add(ix.programId);
+            });
+        } catch (e) {
+            error(`Program Diversity Fetch Error: ${e.message}`);
+        }
+    }
+    return programSet.size;
+}
+
 // ==================== STEP-WISE WARM WALLET DETECTION ====================
 
 async function checkWarmWallet(creator) {
@@ -28,6 +51,7 @@ async function checkWarmWallet(creator) {
         let historyFound = false;
         let totalTxs = 0;
         let birthTime = null;
+        let signatures = [];
 
         // Step 1: Age Check
         for (let i = 0; i < 5; i++) {
@@ -45,6 +69,7 @@ async function checkWarmWallet(creator) {
 
             historyFound = true;
             totalTxs += txs.length;
+            signatures.push(...txs.map(t => t.signature));
 
             const oldestTxInBatch = txs[txs.length - 1]; 
             lastSignature = oldestTxInBatch.signature;
@@ -82,27 +107,8 @@ async function checkWarmWallet(creator) {
             return { warm: false };
         }
 
-        // Step 4: Program Diversity (only if previous steps passed)
-        const programSet = new Set();
-        for (let i = 0; i < Math.min(10, totalTxs); i++) { // limit to first 10 txs for efficiency
-            try {
-                const sig = lastSignature;
-                const txDetail = await axios.post(HELIUS_RPC, {
-                    jsonrpc: "2.0", id: 1,
-                    method: "getTransaction",
-                    params: [sig, { encoding: "json" }]
-                }, { headers: HEADERS, timeout: 8000 });
-
-                const instructions = txDetail.data.result?.transaction?.message?.instructions || [];
-                instructions.forEach(ix => {
-                    if (ix.programId) programSet.add(ix.programId);
-                });
-            } catch (e) {
-                error(`Program Diversity Fetch Error: ${e.message}`);
-            }
-        }
-
-        const programCount = programSet.size;
+        // Step 4: Program Diversity
+        const programCount = await getProgramDiversity(creator, signatures);
         if (programCount < 3) {
             reject(`Program Diversity: ${programCount} (need 3+)`);
             return { warm: false };
@@ -121,38 +127,60 @@ async function checkWarmWallet(creator) {
     }
 }
 
-// ==================== SEND ALERT ====================
+// ==================== TELEGRAM COMMAND ====================
 
-async function sendAlert(mint, name, metrics) {
+bot.onText(/\/check (.+)/, async (msg, match) => {
+    const chatId = msg.chat.id;
+    const mint = match[1].trim();
+
     try {
-        const report = 
-            `🌟 **REAL DEV - VERIFIED** 🌟\n\n` +
-            `🏷️ **Token:** ${name}\n` +
-            `📋 **Mint:** \`${mint}\`\n\n` +
-            `✅ **VERIFIED METRICS:**\n` +
-            `• Wallet Age: ${metrics.age} days\n` +
-            `• Balance: ${metrics.balance} SOL\n` +
-            `• Tx Count: ${metrics.txCount}\n` +
-            `• Program Diversity: ${metrics.programCount}\n` +
-            `• First Tx: ${metrics.firstTx}\n\n` +
-            `💰 [Pump.Fun](https://pump.fun/${mint})\n` +
-            `📊 [DexScreener](https://dexscreener.com/solana/${mint})`;
+        log(`🔎 Manual Check Requested for Mint: ${mint}`);
 
-        await bot.sendMessage(TELEGRAM_CHAT_ID, report, { 
-            parse_mode: 'Markdown',
-            disable_web_page_preview: true
-        });
-        
-        log(`📤 ALERT SENT FOR: ${name}`);
-        return true;
+        // Mint info fetch with error handling
+        let res;
+        try {
+            res = await axios.get(`https://api.pump.fun/metadata/${mint}`);
+        } catch (e) {
+            bot.sendMessage(chatId, `⚠️ Mint metadata API unavailable. Try again later or check mint format.`);
+            return;
+        }
+
+        const creator = res.data?.creator || null;
+        const name = res.data?.symbol || "Unknown";
+
+        if (!creator) {
+            bot.sendMessage(chatId, `❌ Creator not found for mint: ${mint}`);
+            return;
+        }
+
+        const walletCheck = await checkWarmWallet(creator);
+
+        if (walletCheck.warm) {
+            const report = 
+                `🌟 **REAL DEV - VERIFIED** 🌟\n\n` +
+                `🏷️ **Token:** ${name}\n` +
+                `📋 **Mint:** \`${mint}\`\n\n` +
+                `✅ **VERIFIED METRICS:**\n` +
+                `• Wallet Age: ${walletCheck.age} days\n` +
+                `• Balance: ${walletCheck.balance} SOL\n` +
+                `• Tx Count: ${walletCheck.txCount}\n` +
+                `• Program Diversity: ${walletCheck.programCount}\n` +
+                `• First Tx: ${walletCheck.firstTx}\n\n` +
+                `💰 [Pump.Fun](https://pump.fun/${mint})\n` +
+                `📊 [DexScreener](https://dexscreener.com/solana/${mint})`;
+
+            bot.sendMessage(chatId, report, { parse_mode: 'Markdown', disable_web_page_preview: true });
+        } else {
+            bot.sendMessage(chatId, `⚠️ Wallet did not meet warm criteria for mint: ${mint}`);
+        }
 
     } catch (e) {
-        error(`Telegram Failed: ${e.message}`);
-        return false;
+        error(`Manual Check Error: ${e.message}`);
+        bot.sendMessage(chatId, `❌ Error checking mint: ${e.message}`);
     }
-}
+});
 
-// ==================== MONITORING LOGIC ====================
+// ==================== AUTO MONITORING ====================
 
 function monitorPumpFun() {
     log('📡 Initializing WebSocket Connection...');
@@ -177,41 +205,4 @@ function monitorPumpFun() {
             const walletCheck = await checkWarmWallet(creator);
 
             if (walletCheck.warm) {
-                log(`🚀 CRITERIA MATCHED! Sending Telegram Alert...`);
-                await sendAlert(mint, name, walletCheck);
-            }
-
-        } catch (e) {
-            error(`Event Processing Error: ${e.message}`);
-        }
-    });
-
-    ws.on('close', () => {
-        error('WebSocket Connection Closed.');
-        log('⏳ Reconnecting in 5 seconds...');
-        setTimeout(monitorPumpFun, 5000);
-    });
-
-    ws.on('error', (err) => {
-        error(`WebSocket Error: ${err.message}`);
-    });
-}
-
-// ==================== STARTUP ====================
-
-async function startup() {
-    console.clear();
-    console.log(`
-╔════════════════════════════════════════════════════════════╗
-║  🚀 V28.0 - STEP-WISE FORENSIC MONITOR                     ║
-║  🔥 Real Dev Detection (270+d, 2+SOL, 200+Txs, 3+Programs) ║
-║  ⚡ Powered by PumpPortal & Helius                         ║
-╚════════════════════════════════════════════════════════════╝
-    `);
-
-    log("✅ System Check Passed");
-    log(`📱 Telegram Bot: Active`);
-    monitorPumpFun();
-}
-
-startup();
+                log(`🚀 CRITERIA MATCHED! Sending Telegram
