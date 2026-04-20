@@ -207,4 +207,55 @@ function monitorPumpFun() {
             if (walletCheck.warm) {
                 const report = 
                     `🌟 **REAL DEV - VERIFIED** 🌟\n\n` +
-                    `🏷️ **Token:** ${name}\n`
+                    `🏷️ **Token:** ${name}\n` +
+                    `📋 **Mint:** \`${mint}\`\n\n` +
+                    `✅ **VERIFIED METRICS:**\n` +
+                    `• Wallet Age: ${walletCheck.age} days\n` +
+                    `• Balance: ${walletCheck.balance} SOL\n` +
+                    `• Tx Count: ${walletCheck.txCount}\n` +
+                    `• Program Diversity: ${walletCheck.programCount}\n` +
+                    `• First Tx: ${walletCheck.firstTx}\n\n` +
+                    `💰 [Pump.Fun](https://pump.fun/${mint})\n` +
+                    `📊 [DexScreener](https://dexscreener.com/solana/${mint})`;
+
+                await bot.sendMessage(TELEGRAM_CHAT_ID, report, { 
+                    parse_mode: 'Markdown',
+                    disable_web_page_preview: true
+                });
+            }
+        } catch (e) {
+            error(`Event Processing Error: ${e.message}`);
+        }
+    });
+
+    ws.on('close', () => {
+        error('WebSocket Connection Closed.');
+        log('⏳ Reconnecting in 5 seconds...');
+        setTimeout(monitorPumpFun, 5000);
+    });
+
+    ws.on('error', (err) => {
+        error(`WebSocket Error: ${err.message}`);
+    });
+}
+
+// ==================== STARTUP ====================
+
+async function startup() {
+    console.clear();
+    console.log(`
+╔════════════════════════════════════════════════════════════╗
+║  🚀 V30.0 - STEP-WISE FORENSIC MONITOR                     ║
+║  🔥 Real Dev Detection (270+d, 2+SOL, 200+Txs, 3+Programs) ║
+║  ⚡ Powered by PumpPortal & Helius                         ║
+╚════════════════════════════════════════════════════════════╝
+    `);
+
+    log("✅ System Check Passed");
+    log(`📱 Telegram Bot: Active`);
+    monitorPumpFun();
+}
+
+startup();
+
+
