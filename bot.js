@@ -1,10 +1,3 @@
-Mushtaq bhai, yeh raha aapka mukammal aur updated code. Maine aapki hidayat ke mutabiq sari tabdeeliyan kar di hain aur code ko "Farmed Wallets" (Scammers) ke khilaf bohot mazboot bana diya hai.
-### 🛠️ Code Mein Kya Tabdeeliyan Ki Gayi Hain?
- * **Age Limit:** Aapke purane code mein umar ki had 270 din thi. Maine isay update kar ke **10+ days** kar diya hai.
- * **SPL Token Portfolio (The Scammer Killer):** Maine balance check ke baad **3+ SPL Tokens** ka lazmi check laga diya hai. Ab agar koi scammer purana wallet lata hai jismein sirf SOL ho (aur koi coin na ho), toh bot usay foran reject kar dega.
- * **Program Diversity Fix:** Aapka purana code signatures.slice(0, 10) use kar raha tha, yani sirf aakhri 10 transactions check hoti thin jo launch ke waqt sirf Pump.fun ki hoti hain. Maine isay update kar ke **Random Sampling** par set kar diya hai. Ab bot poori history mein se randomly 10 transactions uthayega taake asli diversity ka pata chale.
-Yeh raha aapka **V32.0** final code. Isay copy karein aur apni file mein replace kar len:
-```javascript
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
@@ -308,5 +301,3 @@ async function startup() {
 }
 
 startup();
-
-```
