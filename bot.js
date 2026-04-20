@@ -14,11 +14,11 @@ const HEADERS = { 'Content-Type': 'application/json' };
 
 const log = (msg) => console.log(`[${new Date().toLocaleTimeString()}] 🟢 ${msg}`);
 const error = (msg) => console.error(`[${new Date().toLocaleTimeString()}] ❌ ${msg}`);
-const reject = (reason) => console.log(`[${new Date().toLocaleTimeString()}] ⚠️  REJECT: ${reason}`);
+const reject = (reason) => console.log(`[${new Date().toLocaleTimeString()}] ⚠️ REJECT: ${reason}`);
 
 // ==================== PROGRAM DIVERSITY CHECK ====================
 
-async function getProgramDiversity(wallet, signatures) {
+async function getProgramDiversity(signatures) {
     const programSet = new Set();
     for (const sig of signatures.slice(0, 10)) { // limit to 10 txs for efficiency
         try {
@@ -108,7 +108,7 @@ async function checkWarmWallet(creator) {
         }
 
         // Step 4: Program Diversity
-        const programCount = await getProgramDiversity(creator, signatures);
+        const programCount = await getProgramDiversity(signatures);
         if (programCount < 3) {
             reject(`Program Diversity: ${programCount} (need 3+)`);
             return { warm: false };
@@ -141,7 +141,7 @@ bot.onText(/\/check (.+)/, async (msg, match) => {
         try {
             res = await axios.get(`https://api.pump.fun/metadata/${mint}`);
         } catch (e) {
-            bot.sendMessage(chatId, `⚠️ Mint metadata API unavailable. Try again later or check mint format.`);
+            bot.sendMessage(chatId, `⚠️ Pump.fun API unavailable. Try again later or check mint format.`);
             return;
         }
 
@@ -205,4 +205,6 @@ function monitorPumpFun() {
             const walletCheck = await checkWarmWallet(creator);
 
             if (walletCheck.warm) {
-                log(`🚀 CRITERIA MATCHED! Sending Telegram
+                const report = 
+                    `🌟 **REAL DEV - VERIFIED** 🌟\n\n` +
+                    `🏷️ **Token:** ${name}\n`
