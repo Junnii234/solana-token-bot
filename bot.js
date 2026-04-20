@@ -16,6 +16,49 @@ const log = (msg) => console.log(`[${new Date().toLocaleTimeString()}] 🟢 ${ms
 const error = (msg) => console.error(`[${new Date().toLocaleTimeString()}] ❌ ${msg}`);
 const reject = (reason) => console.log(`[${new Date().toLocaleTimeString()}] ⚠️ REJECT: ${reason}`);
 
+
+// ==================== DEV HISTORY ====================
+
+async function getDevTokenHistory(creator) {
+    try {
+        const res = await axios.get(`https://frontend-api.pump.fun/coins/user-created-coins/${creator}`, {
+            timeout: 8000
+        });
+        return res.data || [];
+    } catch (e) {
+        error(`Dev History Error: ${e.message}`);
+        return [];
+    }
+}
+
+// ==================== DEV SCORING ====================
+
+function analyzeDevHistory(tokens) {
+    let rugs = 0;
+    let successful = 0;
+    let total = tokens.length;
+
+    tokens.forEach(t => {
+        if (t.complete) successful++;
+        else rugs++;
+    });
+
+    let score = 0;
+
+    if (successful >= 3) score += 3;
+    else if (successful >= 1) score += 1;
+
+    if (rugs > successful) score -= 2;
+
+    return {
+        total,
+        rugs,
+        successful,
+        score
+    };
+}
+
+
 // ==================== PROGRAM DIVERSITY CHECK ====================
 
 async function getProgramDiversity(signatures) {
@@ -38,6 +81,7 @@ async function getProgramDiversity(signatures) {
     }
     return programSet.size;
 }
+
 
 // ==================== STEP-WISE WARM WALLET DETECTION ====================
 
@@ -101,32 +145,59 @@ async function checkWarmWallet(creator) {
             return { warm: false };
         }
 
+        // ==================== NEW: DEV HISTORY CHECK ====================
+
+        const tokens = await getDevTokenHistory(creator);
+        const devStats = analyzeDevHistory(tokens);
+
+        if (devStats.total === 0) {
+            reject("No dev history found ❌");
+            return { warm: false };
+        }
+
+        if (devStats.successful === 0) {
+            reject(`0 successful tokens (Rugs: ${devStats.rugs}) ❌`);
+            return { warm: false };
+        }
+
+        if (devStats.score <= 0) {
+            reject(`Bad dev score: ${devStats.score} ❌`);
+            return { warm: false };
+        }
+
         // Step 3: Transaction Count
         if (totalTxs < 200) {
             reject(`Tx Count: ${totalTxs} (need 200+)`);
             return { warm: false };
         }
 
-        // Step 4: Program Diversity (relaxed)
+        // Step 4: Program Diversity
         const programCount = await getProgramDiversity(signatures);
-        let diversityNote = "";
-        if (programCount > 0) {
-            diversityNote = `Program Diversity: ${programCount} ✅ Very Good`;
-        } else {
-            diversityNote = `Program Diversity: 0 ⚠️ No diversity detected (not strict filter)`;
-        }
+        let diversityNote = programCount > 0 
+            ? `Program Diversity: ${programCount} ✅`
+            : `Program Diversity: 0 ⚠️`;
 
         const birthDate = new Date(birthTime * 1000);
-        log(`📅 First Transaction: ${birthDate.toISOString()}`);
 
-        log(`   ✅ WARM WALLET VERIFIED: ${walletAgeDays.toFixed(1)} days old | ${totalTxs} txs | ${diversityNote}`);
-        return { warm: true, age: walletAgeDays.toFixed(1), balance: balanceSol.toFixed(2), txCount: totalTxs, firstTx: birthDate.toISOString(), programCount, diversityNote };
+        log(`   ✅ WARM + GOOD DEV: ${walletAgeDays.toFixed(1)}d | Score: ${devStats.score}`);
+
+        return { 
+            warm: true,
+            age: walletAgeDays.toFixed(1),
+            balance: balanceSol.toFixed(2),
+            txCount: totalTxs,
+            firstTx: birthDate.toISOString(),
+            programCount,
+            diversityNote,
+            devStats
+        };
 
     } catch (e) {
         error(`Logic Error: ${e.message}`);
         return { warm: false };
     }
-    }
+}
+
 
 // ==================== TELEGRAM COMMAND ====================
 
@@ -134,69 +205,60 @@ bot.onText(/\/check (.+)/, async (msg, match) => {
     const chatId = msg.chat.id;
     let mint = match[1].trim();
 
-    // Auto-remove 'pump' suffix if present
     if (mint.endsWith("pump")) {
         mint = mint.replace("pump", "");
     }
 
     try {
-        log(`🔎 Manual Check Requested for Mint: ${mint}`);
+        log(`🔎 Manual Check: ${mint}`);
 
         let res;
         try {
-            // Try Pump.fun API
             res = await axios.get(`https://api.pump.fun/metadata/${mint}`);
-        } catch (e) {
-            // Fallback if Pump.fun API fails
-            bot.sendMessage(chatId, `⚠️ Pump.fun API unavailable. Blockchain metrics only will be checked.`);
+        } catch {
+            bot.sendMessage(chatId, `⚠️ Pump API down, using fallback`);
             res = { data: {} };
         }
 
-        const creator = res.data?.creator || mint; // fallback to mint itself
+        const creator = res.data?.creator || mint;
         const name = res.data?.symbol || "Unknown";
 
         const walletCheck = await checkWarmWallet(creator);
 
         if (walletCheck.warm) {
             const report = 
-                `🌟 **REAL DEV - VERIFIED** 🌟\n\n` +
-                `🏷️ **Token:** ${name}\n` +
-                `📋 **Mint:** \`${mint}\`\n\n` +
-                `✅ **VERIFIED METRICS:**\n` +
-                `• Wallet Age: ${walletCheck.age} days\n` +
-                `• Balance: ${walletCheck.balance} SOL\n` +
-                `• Tx Count: ${walletCheck.txCount}\n` +
-                `• ${walletCheck.diversityNote}\n` +
-                `• First Tx: ${walletCheck.firstTx}\n\n` +
-                `💰 [Pump.Fun](https://pump.fun/${mint})\n` +
-                `📊 [DexScreener](https://dexscreener.com/solana/${mint})`;
+                `🌟 REAL DEV DETECTED 🌟\n\n` +
+                `Token: ${name}\n` +
+                `Mint: ${mint}\n\n` +
 
-            bot.sendMessage(chatId, report, { 
-                parse_mode: 'Markdown', 
-                disable_web_page_preview: true 
-            });
+                `DEV HISTORY:\n` +
+                `• Total: ${walletCheck.devStats.total}\n` +
+                `• Successful: ${walletCheck.devStats.successful}\n` +
+                `• Rugs: ${walletCheck.devStats.rugs}\n` +
+                `• Score: ${walletCheck.devStats.score}\n\n` +
+
+                `Wallet Age: ${walletCheck.age} days\n` +
+                `Balance: ${walletCheck.balance} SOL\n`;
+
+            bot.sendMessage(chatId, report);
 
         } else {
-            bot.sendMessage(chatId, `⚠️ Wallet did not meet warm criteria for mint: ${mint}`);
+            bot.sendMessage(chatId, `❌ Rejected`);
         }
 
     } catch (e) {
-        error(`Manual Check Error: ${e.message}`);
-        bot.sendMessage(chatId, `❌ Error checking mint: ${e.message}`);
+        bot.sendMessage(chatId, `Error`);
     }
 });
 
 
-
-// ==================== AUTO MONITORING ====================
+// ==================== AUTO MONITOR ====================
 
 function monitorPumpFun() {
-    log('📡 Initializing WebSocket Connection...');
     const ws = new WebSocket('wss://pumpportal.fun/api/data');
 
     ws.on('open', () => {
-        log('✅ WebSocket Connected. Subscribing to New Tokens...');
-        ws.send(JSON.stringify({ "method": "subscribeNewToken" }));
+        ws.send(JSON.stringify({ method: "subscribeNewToken" }));
     });
 
     ws.on('message', async (data) => {
@@ -204,66 +266,28 @@ function monitorPumpFun() {
             const event = JSON.parse(data.toString());
             const mint = event.mint;
             const creator = event.traderPublicKey;
-            const name = event.symbol || 'Unknown';
 
             if (!mint || alertedMints.has(mint)) return;
             alertedMints.add(mint);
 
-            log(`\n🎯 NEW TOKEN DETECTED: ${name}`);
             const walletCheck = await checkWarmWallet(creator);
 
             if (walletCheck.warm) {
-                const report =
-                    `🌟 **REAL DEV - VERIFIED** 🌟\n\n` +
-                    `🏷️ **Token:** ${name}\n` +
-                    `📋 **Mint:** \`${mint}\`\n\n` +
-                    `✅ **VERIFIED METRICS:**\n` +
-                    `• Wallet Age: ${walletCheck.age} days\n` +
-                    `• Balance: ${walletCheck.balance} SOL\n` +
-                    `• Tx Count: ${walletCheck.txCount}\n` +
-                    `• ${walletCheck.diversityNote}\n` +
-                    `• First Tx: ${walletCheck.firstTx}\n\n` +
-                    `💰 [Pump.Fun](https://pump.fun/${mint})\n` +
-                    `📊 [DexScreener](https://dexscreener.com/solana/${mint})`;
-
-                await bot.sendMessage(TELEGRAM_CHAT_ID, report, {
-                    parse_mode: 'Markdown',
-                    disable_web_page_preview: true
-                });
-            } else {
-                log(`⚠️ Wallet did NOT meet warm criteria — skipping alert.`);
+                bot.sendMessage(TELEGRAM_CHAT_ID,
+                    `🔥 GOOD DEV TOKEN\nScore: ${walletCheck.devStats.score}\nMint: ${mint}`
+                );
             }
 
-        } catch (e) {
-            error(`Event Processing Error: ${e.message}`);
-        }
-    });
-
-    ws.on('close', () => {
-        error('WebSocket Connection Closed.');
-        log('⏳ Reconnecting in 5 seconds...');
-        setTimeout(monitorPumpFun, 5000);
-    });
-
-    ws.on('error', (err) => {
-        error(`WebSocket Error: ${err.message}`);
+        } catch {}
     });
 }
 
-// ==================== STARTUP ====================
 
-async function startup() {
+// ==================== START ====================
+
+function startup() {
     console.clear();
-    console.log(`
-╔════════════════════════════════════════════════════════════╗
-║  🚀 V31.0 - STEP-WISE FORENSIC MONITOR                     ║
-║  🔥 Real Dev Detection (270+d, 2+SOL, 200+Txs, Relaxed PD) ║
-║  ⚡ Powered by PumpPortal & Helius                         ║
-╚════════════════════════════════════════════════════════════╝
-    `);
-
-    log("✅ System Check Passed");
-    log(`📱 Telegram Bot: Active`);
+    log("🚀 BOT STARTED WITH DEV SCORING");
     monitorPumpFun();
 }
 
