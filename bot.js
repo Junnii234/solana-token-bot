@@ -18,17 +18,35 @@ const reject = (reason) => console.log(`[${new Date().toLocaleTimeString()}] ⚠
 
 
 // ==================== DEV HISTORY ====================
-
 async function getDevTokenHistory(creator) {
-    try {
-        const res = await axios.get(`https://frontend-api.pump.fun/coins/user-created-coins/${creator}`, {
-            timeout: 8000
-        });
-        return res.data || [];
-    } catch (e) {
-        error(`Dev History Error: ${e.message}`);
-        return [];
-    }
+    const url = `https://frontend-api.pump.fun/coins/user-created-coins/${creator}`;
+
+    // helper retry function
+    const fetchData = async (attempt = 1) => {
+        try {
+            const res = await axios.get(url, {
+                timeout: 10000,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0',
+                    'Accept': 'application/json'
+                }
+            });
+
+            return res.data || [];
+        } catch (e) {
+            error(`Dev History Attempt ${attempt} Failed: ${e.message}`);
+
+            // retry once only
+            if (attempt < 2) {
+                log(`🔁 Retrying Dev History...`);
+                return await fetchData(attempt + 1);
+            }
+
+            return []; // safe fallback
+        }
+    };
+
+    return await fetchData();
 }
 
 // ==================== DEV SCORING ====================
@@ -84,6 +102,60 @@ async function getProgramDiversity(signatures) {
 
 
 // ==================== STEP-WISE WARM WALLET DETECTION ====================
+
+async function getOnChainDevStats(wallet) {
+    try {
+        const res = await axios.post(HELIUS_RPC, {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "getSignaturesForAddress",
+            params: [wallet, { limit: 1000 }]
+        }, { headers: HEADERS, timeout: 10000 });
+
+        const txs = res.data.result || [];
+
+        let tokenCreations = 0;
+        let programSet = new Set();
+
+        for (const tx of txs.slice(0, 200)) {
+            try {
+                const detail = await axios.post(HELIUS_RPC, {
+                    jsonrpc: "2.0",
+                    id: 1,
+                    method: "getTransaction",
+                    params: [tx.signature, { encoding: "json" }]
+                }, { headers: HEADERS, timeout: 8000 });
+
+                const instructions = detail.data.result?.transaction?.message?.instructions || [];
+
+                for (const ix of instructions) {
+                    if (ix.programId) programSet.add(ix.programId);
+
+                    // token mint pattern detection
+                    if (ix.parsed?.type === "initializeMint" ||
+                        ix.parsed?.type === "createAccount") {
+                        tokenCreations++;
+                    }
+                }
+            } catch {}
+        }
+
+        return {
+            txCount: txs.length,
+            tokenCreations,
+            programDiversity: programSet.size
+        };
+
+    } catch (e) {
+        error(`On-chain Dev Stats Error: ${e.message}`);
+        return {
+            txCount: 0,
+            tokenCreations: 0,
+            programDiversity: 0
+        };
+    }
+}
+
 
 async function checkWarmWallet(creator) {
     try {
@@ -147,8 +219,24 @@ async function checkWarmWallet(creator) {
 
         // ==================== NEW: DEV HISTORY CHECK ====================
 
-        const tokens = await getDevTokenHistory(creator);
-        const devStats = analyzeDevHistory(tokens);
+        const devStats = await getOnChainDevStats(creator);
+
+// scoring system
+let score = 0;
+
+if (devStats.txCount > 300) score += 1;
+if (devStats.tokenCreations >= 2) score += 2;
+if (devStats.programDiversity > 3) score += 1;
+
+if (devStats.tokenCreations === 0) {
+    reject("No token creation history ❌");
+    return { warm: false };
+}
+
+if (score <= 1) {
+    reject(`Low dev score: ${score} ❌`);
+    return { warm: false };
+}
 
         if (devStats.total === 0) {
             reject("No dev history found ❌");
