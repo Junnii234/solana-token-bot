@@ -120,7 +120,7 @@ async function checkWarmWallet(creator) {
             birthTime = oldestTxInBatch.blockTime || now;
             walletAgeDays = (now - birthTime) / 86400;
 
-            if (walletAgeDays >= 270) break;
+            if (walletAgeDays >= 10) break;
             if (txs.length < 1000) break;
         }
 
@@ -129,8 +129,8 @@ async function checkWarmWallet(creator) {
             return { warm: false };
         }
 
-        if (walletAgeDays < 270) {
-            reject(`Age: ${walletAgeDays.toFixed(1)}d (need 270+)`);
+        if (walletAgeDays < 10) {
+            reject(`Age: ${walletAgeDays.toFixed(1)}d (need 10+)`);
             return { warm: false };
         }
 
