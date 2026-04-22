@@ -18,6 +18,7 @@ const APPROVED_FUNDERS = [
     "BY4StcU9Y2BpgH8quZzorg31EGE4L1rjomN8FNsCBEcx", // Example HTX Hot Wallet
     "5tzFkiKscXHK5ZXCGbXZxdw7gTjjD1mBwuoFbhUvuAi9", 
     "8BYUixL8tyEfPy7ejMAHq8kPndYqwBs7pqrwzgTGVmE1",
+    "iGdFcQoyR2MwbXMHQskhmNsqddZ6rinsipHc4TNSdwu",
     "7GDU58vgKnwee48tn1mn4v9KZDj9aTwiPZrgBf1Ffg5g",
     "5MucoZNkyy2WuZDThwu1iFY73uXsgGc8TNmd5wTsUai",
     "GJRs4FwHtemZ5ZE9x3FNvJ8TMwitKTh21yxdRPqn7npE",
