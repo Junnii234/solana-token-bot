@@ -154,23 +154,21 @@ async function processPipeline(mintAddress, creator, symbol, currentStage) {
     if (currentStage === STAGES.BONDING_CURVE) {
         const passed = await analyzeBondingCurvePhase(creator, mintAddress, symbol);
         if (passed) {
-            // Alert for Phase 1 is removed as requested
-            
             // Schedule Phase 2 (LP Check) 5 minute baad
             setTimeout(() => {
                 processPipeline(mintAddress, creator, symbol, STAGES.LIQUIDITY_POOL);
-            }, 300000); // 300,000 ms = 5 minutes
+            }, 300000); 
         }
     } 
     else if (currentStage === STAGES.LIQUIDITY_POOL) {
         const passed = await analyzeLiquidityPoolPhase(mintAddress);
         if (passed) {
-            sendAlert(mintAddress, symbol, "LIQUIDITY_POOL_PASS");
+            // Alert for Phase 2 is removed as requested
             
-            // Schedule Phase 3 (Mature Check) adha ghanta baad
+            // Schedule Phase 3 (Mature Check) 30 minutes baad
             setTimeout(() => {
                 processPipeline(mintAddress, creator, symbol, STAGES.MATURE);
-            }, 1800000); // 1,800,000 ms = 30 minutes
+            }, 1800000); 
         }
     }
     else if (currentStage === STAGES.MATURE) {
@@ -223,17 +221,8 @@ function sendAlert(mintAddress, symbol, stage) {
 
     let msg = '';
     
-    if (stage === "LIQUIDITY_POOL_PASS") {
-        msg = `🚀 **PHASE 2: READY FOR ENTRY** 🚀\n\n` +
-              `🏷️ **${symbol}**\n` +
-              `📋 Mint: \`${mintAddress}\`\n\n` +
-              `📊 **HOLDER STATS:**\n` +
-              `• Top 10 Hold: ${tokenData.holderData.top10Percentage}%\n` +
-              `• LP Status: ✅ Locked\n\n` +
-              `🔗 [DexScreener](https://dexscreener.com/solana/${mintAddress})\n` +
-              `⚠️ **Entry now - Phase 2 Passed**`;
-    } 
-    else if (stage === "MATURE_PASS") {
+    // Sirf Phase 3 ka alert active hai
+    if (stage === "MATURE_PASS") {
         msg = `✅ **PHASE 3: FULLY VERIFIED** ✅\n\n` +
               `🏷️ **${symbol}**\n` +
               `🔗 [DexScreener](https://dexscreener.com/solana/${mintAddress})\n` +
@@ -256,7 +245,6 @@ function start() {
         try {
             const event = JSON.parse(data.toString());
             if (event.mint && event.traderPublicKey && event.symbol && !monitoredTokens.has(event.mint)) {
-                // Yahan se nayi pipeline shuru hoti hai Phase 1 se
                 processPipeline(event.mint, event.traderPublicKey, event.symbol, STAGES.BONDING_CURVE);
             }
         } catch (e) {}
