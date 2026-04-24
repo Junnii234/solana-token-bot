@@ -50,7 +50,8 @@ const APPROVED_FUNDERS = [
     "HHYQJpCJAJSuvX6dKuiZgZL6ndu17PpJNWS5PHKKxcuv", "DoAsxPQgiyAxyaJNvpAAUb2ups6rbJRdYrCPyWxwRxBb",
     "DSYq7yD7ewHeDETSWFZZQzPYhGEdtNs1YCu3RduCUHCT", "mt6aMVg1e1ZfsjaqworY628CDiSWLphrtxykjHSwqdj",
     "FWznbcNXWQuHTawe9RxvQ2LdCENssh12dsznf4RiouN5", "3pnE2ZWsRswFRFaWjQ7GhH7hMfzpVhxTRK8SqLFpkfXV",
-    "gasTzr94Pmp4Gf8vknQnqxeYxdgwFjbgdJa4msYRpnB"
+    "gasTzr94Pmp4Gf8vknQnqxeYxdgwFjbgdJa4msYRpnB" , 
+    "2snHHreXbpJ7UwZxPe37gnUNf7Wx7wv6UKDSR2JckKuS"
 ];
 
 const log = (msg) => console.log(`[${new Date().toLocaleTimeString()}] 🟢 ${msg}`);
