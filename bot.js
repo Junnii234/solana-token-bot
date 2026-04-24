@@ -19,6 +19,14 @@ const STAGES = {
     MATURE: 'mature'
 };
 
+// ==================== TARGET BUYERS (CABAL) ====================
+const TARGET_BUYERS = [
+    "Adz7E8vLzZ2vR5pM6fT9xY3qN1wS8vH4jK6pL9tY7pUp",
+    "GvP5wR2qT8yN9xZ1mK6fL3jS7vH4jP9tU2bW8mQ4y9tY",
+    "5QzMaBcDeFgHiJkLmNoPqRsTuVwXyZ123456789m9N2",
+    "7xRzU2K8vT9yN4mW6fL1jS3vP5mQ7hK9tL2bW4rS6p9a"
+];
+
 // ==================== TRUSTED HOT WALLETS ====================
 const APPROVED_FUNDERS = [
     "BY4StcU9Y2BpgH8quZzorg31EGE4L1rjomN8FNsCBEcx", "5g7yNHyGLJ7fiQ9SN9mf47opDnMjc585kqXWt6d7aBWs", 
@@ -53,7 +61,6 @@ const reject = (reason) => console.log(`[${new Date().toLocaleTimeString()}] �
 async function analyzeBondingCurvePhase(creator, mintAddress, symbol) {
     log(`🔍 Phase 1 - Analysing: ${symbol}`);
     
-    // 1. Balance Check
     const balRes = await axios.post(HELIUS_RPC, {
         jsonrpc: "2.0", id: 1, method: "getBalance", params: [creator]
     }, { headers: HEADERS });
@@ -64,7 +71,6 @@ async function analyzeBondingCurvePhase(creator, mintAddress, symbol) {
         return false;
     }
 
-    // 2. Funder Check
     const sigRes = await axios.post(HELIUS_RPC, {
         jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [creator, { limit: 10 }]
     }, { headers: HEADERS });
@@ -80,7 +86,6 @@ async function analyzeBondingCurvePhase(creator, mintAddress, symbol) {
         return false;
     }
 
-    // 3. Rug History
     const rugCheck = await checkBasicRugHistory(creator);
     if (rugCheck.isRugger) {
         reject(`${symbol} - Serial rugger (${rugCheck.count} dead tokens)`);
@@ -108,8 +113,17 @@ async function analyzeLiquidityPoolPhase(mintAddress) {
 
     try {
         const holders = await getTokenTopHolders(mintAddress);
-        const creatorHolding = holders.find(h => h.address === tokenData.creator);
         
+        // 🎯 TARGET BUYER (CABAL) LOGIC INJECTED HERE
+        const foundTargetBuyers = holders.filter(h => TARGET_BUYERS.includes(h.address));
+        
+        if (foundTargetBuyers.length > 0) {
+            log(`🚨 Target Buyers Found in ${tokenData.symbol}!`);
+            // Agar target buyer mil jaye to foran alert bhejo
+            sendAlert(mintAddress, tokenData.symbol, "TARGET_BUYER_FOUND", foundTargetBuyers);
+        }
+
+        const creatorHolding = holders.find(h => h.address === tokenData.creator);
         if (creatorHolding && creatorHolding.percentage > 30) {
             reject(`${tokenData.symbol} - Creator holds ${creatorHolding.percentage}% (Dump risk)`);
             return false;
@@ -150,11 +164,9 @@ async function analyzeMaturePhase(mintAddress) {
 
 // ==================== MAIN WORKFLOW MANAGER ====================
 async function processPipeline(mintAddress, creator, symbol, currentStage) {
-    
     if (currentStage === STAGES.BONDING_CURVE) {
         const passed = await analyzeBondingCurvePhase(creator, mintAddress, symbol);
         if (passed) {
-            // Schedule Phase 2 (LP Check) 5 minute baad
             setTimeout(() => {
                 processPipeline(mintAddress, creator, symbol, STAGES.LIQUIDITY_POOL);
             }, 300000); 
@@ -163,9 +175,6 @@ async function processPipeline(mintAddress, creator, symbol, currentStage) {
     else if (currentStage === STAGES.LIQUIDITY_POOL) {
         const passed = await analyzeLiquidityPoolPhase(mintAddress);
         if (passed) {
-            // Alert for Phase 2 is removed as requested
-            
-            // Schedule Phase 3 (Mature Check) 30 minutes baad
             setTimeout(() => {
                 processPipeline(mintAddress, creator, symbol, STAGES.MATURE);
             }, 1800000); 
@@ -208,25 +217,38 @@ async function checkBasicRugHistory(creator) {
     } catch (e) { return { isRugger: false, count: 0 }; }
 }
 
-// Placeholder APIs
-async function getTokenTopHolders(mintAddress) { return [{ address: "creator", percentage: 25 }, { address: "holder2", percentage: 15 }]; }
+// Placeholder APIs (Ensure these are wired to actual API calls in your prod environment)
+async function getTokenTopHolders(mintAddress) { return [{ address: "creator", percentage: 25 }, { address: "5Qz...m9N", percentage: 5 }]; }
 async function analyzeTransactionPatterns(mintAddress) { return { uniqueTraders: 50, washTrading: 15 }; }
 async function getVolumeSustainability(mintAddress) { return { currentVolume: 100000, dropRate: 30 }; }
 
 
 // ==================== ALERT SYSTEM ====================
-function sendAlert(mintAddress, symbol, stage) {
+function sendAlert(mintAddress, symbol, stage, extraData = null) {
     const tokenData = monitoredTokens.get(mintAddress);
     if (!tokenData) return;
 
     let msg = '';
     
-    // Sirf Phase 3 ka alert active hai
+    // Naya alert: Target Buyers Found
+    if (stage === "TARGET_BUYER_FOUND") {
+        const matchedWallets = extraData.map(h => `\`${h.address}\``).join('\n');
+        msg = `🚨 **TARGET BUYERS DETECTED** 🚨\n\n` +
+              `🏷️ **${symbol}**\n` +
+              `📝 **Mint:** \`${mintAddress}\`\n\n` +
+              `👀 **Found in Top Holders:**\n${matchedWallets}\n\n` +
+              `🔗 [DexScreener](https://dexscreener.com/solana/${mintAddress})\n` +
+              `🪐 [Jupiter Swap](https://jup.ag/swap/SOL-${mintAddress})`;
+    }
+
+    // Purana alert updated with Mint and Jupiter Swap
     if (stage === "MATURE_PASS") {
         msg = `✅ **PHASE 3: FULLY VERIFIED** ✅\n\n` +
               `🏷️ **${symbol}**\n` +
+              `📝 **Mint:** \`${mintAddress}\`\n\n` +
+              `🎯 **Low Risk - Stable Volume Confirmed**\n\n` +
               `🔗 [DexScreener](https://dexscreener.com/solana/${mintAddress})\n` +
-              `🎯 **Low Risk - Stable Volume Confirmed**`;
+              `🪐 [Jupiter Swap](https://jup.ag/swap/SOL-${mintAddress})`;
     }
 
     if (msg) {
