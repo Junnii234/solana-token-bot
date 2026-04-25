@@ -19,6 +19,9 @@ const STAGES = {
     MATURE: 'mature'
 };
 
+// ==================== RATE LIMIT PROTECTOR ====================
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 // ==================== TARGET BUYERS (CABAL) ====================
 const TARGET_BUYERS = [
     "Adz7E8vLzZ2vR5pM6fT9xY3qN1wS8vH4jK6pL9tY7pUp",
@@ -62,48 +65,55 @@ const reject = (reason) => console.log(`[${new Date().toLocaleTimeString()}] �
 async function analyzeBondingCurvePhase(creator, mintAddress, symbol) {
     log(`🔍 Phase 1 - Analysing: ${symbol}`);
     
-    const balRes = await axios.post(HELIUS_RPC, {
-        jsonrpc: "2.0", id: 1, method: "getBalance", params: [creator]
-    }, { headers: HEADERS });
-    
-    const balance = (balRes.data.result?.value || 0) / 1e9;
-    if (balance < 0.2) {
-        reject(`${symbol} - Low creator balance: ${balance.toFixed(3)} SOL`);
+    try {
+        await sleep(500); // Prevent rate limit
+        const balRes = await axios.post(HELIUS_RPC, {
+            jsonrpc: "2.0", id: 1, method: "getBalance", params: [creator]
+        }, { headers: HEADERS });
+        
+        const balance = (balRes.data.result?.value || 0) / 1e9;
+        if (balance < 0.2) {
+            reject(`${symbol} - Low creator balance: ${balance.toFixed(3)} SOL`);
+            return false;
+        }
+
+        await sleep(500); // Prevent rate limit
+        const sigRes = await axios.post(HELIUS_RPC, {
+            jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [creator, { limit: 10 }]
+        }, { headers: HEADERS });
+
+        const txs = sigRes.data.result || [];
+        if (txs.length === 0) return false;
+
+        const oldestTx = txs[txs.length - 1];
+        const funder = await getFundingSource(oldestTx.signature, creator);
+        
+        if (!APPROVED_FUNDERS.includes(funder)) {
+            reject(`${symbol} - Untrusted funder`);
+            return false;
+        }
+
+        const rugCheck = await checkBasicRugHistory(creator);
+        if (rugCheck.isRugger) {
+            reject(`${symbol} - Serial rugger (${rugCheck.count} dead tokens)`);
+            return false;
+        }
+
+        log(`✅ Phase 1 PASS: ${symbol}`);
+        monitoredTokens.set(mintAddress, {
+            stage: STAGES.BONDING_CURVE,
+            lastCheck: Date.now(),
+            creator,
+            symbol,
+            initialBalance: balance,
+            funder
+        });
+        
+        return true;
+    } catch (e) {
+        if (e.response && e.response.status === 429) log(`⚠️ Helius Rate Limit Hit in Phase 1`);
         return false;
     }
-
-    const sigRes = await axios.post(HELIUS_RPC, {
-        jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [creator, { limit: 10 }]
-    }, { headers: HEADERS });
-
-    const txs = sigRes.data.result || [];
-    if (txs.length === 0) return false;
-
-    const oldestTx = txs[txs.length - 1];
-    const funder = await getFundingSource(oldestTx.signature, creator);
-    
-    if (!APPROVED_FUNDERS.includes(funder)) {
-        reject(`${symbol} - Untrusted funder`);
-        return false;
-    }
-
-    const rugCheck = await checkBasicRugHistory(creator);
-    if (rugCheck.isRugger) {
-        reject(`${symbol} - Serial rugger (${rugCheck.count} dead tokens)`);
-        return false;
-    }
-
-    log(`✅ Phase 1 PASS: ${symbol}`);
-    monitoredTokens.set(mintAddress, {
-        stage: STAGES.BONDING_CURVE,
-        lastCheck: Date.now(),
-        creator,
-        symbol,
-        initialBalance: balance,
-        funder
-    });
-    
-    return true;
 }
 
 // ==================== PHASE 2: LIQUIDITY POOL CHECKS ====================
@@ -113,26 +123,26 @@ async function analyzeLiquidityPoolPhase(mintAddress) {
     log(`🔍 Phase 2 - Checking Holders for ${tokenData.symbol}`);
 
     try {
-        const holders = await getTokenTopHolders(mintAddress);
+        // Asli function call jo blockchain se top holders layega
+        const holders = await getRealTokenTopHolders(mintAddress);
         
         // 🎯 TARGET BUYER (CABAL) LOGIC INJECTED HERE
         const foundTargetBuyers = holders.filter(h => TARGET_BUYERS.includes(h.address));
         
         if (foundTargetBuyers.length > 0) {
             log(`🚨 Target Buyers Found in ${tokenData.symbol}!`);
-            // Agar target buyer mil jaye to foran alert bhejo
             sendAlert(mintAddress, tokenData.symbol, "TARGET_BUYER_FOUND", foundTargetBuyers);
         }
 
         const creatorHolding = holders.find(h => h.address === tokenData.creator);
         if (creatorHolding && creatorHolding.percentage > 30) {
-            reject(`${tokenData.symbol} - Creator holds ${creatorHolding.percentage}% (Dump risk)`);
+            reject(`${tokenData.symbol} - Creator holds ${creatorHolding.percentage.toFixed(2)}% (Dump risk)`);
             return false;
         }
 
         const top10Percent = holders.slice(0, 10).reduce((sum, h) => sum + h.percentage, 0);
         if (top10Percent > 70) {
-            reject(`${tokenData.symbol} - Top 10 hold ${top10Percent}% (Too concentrated)`);
+            reject(`${tokenData.symbol} - Top 10 hold ${top10Percent.toFixed(2)}% (Too concentrated)`);
             return false;
         }
 
@@ -140,7 +150,10 @@ async function analyzeLiquidityPoolPhase(mintAddress) {
         tokenData.stage = STAGES.LIQUIDITY_POOL;
         tokenData.holderData = { top10Percentage: top10Percent, lpLocked: true };
         return true;
-    } catch (e) { return false; }
+    } catch (e) { 
+        if (e.response && e.response.status === 429) log(`⚠️ Helius Rate Limit Hit in Phase 2`);
+        return false; 
+    }
 }
 
 // ==================== PHASE 3: MATURE TOKEN CHECKS ====================
@@ -150,6 +163,7 @@ async function analyzeMaturePhase(mintAddress) {
     log(`🔍 Phase 3 - Mature checks for ${tokenData.symbol}`);
 
     try {
+        // Ye abhi tak placeholder hi hai, agar iski logic chahiye to alag se batayein
         const txPattern = await analyzeTransactionPatterns(mintAddress);
         if (txPattern.washTrading > 50) return false;
 
@@ -192,6 +206,7 @@ async function processPipeline(mintAddress, creator, symbol, currentStage) {
 // ==================== HELPER FUNCTIONS ====================
 async function getFundingSource(signature, creator) {
     try {
+        await sleep(500);
         const txRes = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, method: "getTransaction", params: [signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }]
         }, { headers: HEADERS });
@@ -206,6 +221,7 @@ async function getFundingSource(signature, creator) {
 
 async function checkBasicRugHistory(creator) {
     try {
+        await sleep(500);
         const res = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, method: "getTokenAccountsByOwner",
             params: [creator, { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" }, { encoding: "jsonParsed" }]
@@ -218,8 +234,44 @@ async function checkBasicRugHistory(creator) {
     } catch (e) { return { isRugger: false, count: 0 }; }
 }
 
-// Placeholder APIs (Ensure these are wired to actual API calls in your prod environment)
-async function getTokenTopHolders(mintAddress) { return [{ address: "creator", percentage: 25 }, { address: "5Qz...m9N", percentage: 5 }]; }
+// 🚀 NAYA FUNCTION: Jo sach mein Blockchain se holders nikalega
+async function getRealTokenTopHolders(mintAddress) { 
+    try {
+        await sleep(1000); // RPC load bachane ke liye
+        const res = await axios.post(HELIUS_RPC, {
+            jsonrpc: "2.0", id: 1, method: "getTokenLargestAccounts", params: [mintAddress]
+        }, { headers: HEADERS });
+        
+        const accounts = res.data.result?.value || [];
+        if (accounts.length === 0) return [];
+
+        let holders = [];
+        // Top 15 accounts ka owner aur percentage nikal rahe hain
+        for (let i = 0; i < Math.min(accounts.length, 15); i++) {
+            const acc = accounts[i];
+            
+            await sleep(300); // 429 Error se bachne ke liye gap
+            const accInfo = await axios.post(HELIUS_RPC, {
+                jsonrpc: "2.0", id: 1, method: "getAccountInfo", params: [acc.address, { encoding: "jsonParsed" }]
+            }, { headers: HEADERS });
+
+            const parsedData = accInfo.data.result?.value?.data?.parsed;
+            const ownerAddress = parsedData?.info?.owner || acc.address;
+            
+            holders.push({ 
+                address: ownerAddress, 
+                // Assumed Total Supply for Pump is 1 Billion
+                percentage: (acc.uiAmount / 1000000000) * 100 
+            });
+        }
+        return holders;
+    } catch (e) {
+        log(`❌ Holder fetch failed: ${e.message}`);
+        return []; 
+    } 
+}
+
+// Placeholder APIs for Phase 3 (You can update these later with real logic)
 async function analyzeTransactionPatterns(mintAddress) { return { uniqueTraders: 50, washTrading: 15 }; }
 async function getVolumeSustainability(mintAddress) { return { currentVolume: 100000, dropRate: 30 }; }
 
@@ -231,7 +283,6 @@ function sendAlert(mintAddress, symbol, stage, extraData = null) {
 
     let msg = '';
     
-    // Naya alert: Target Buyers Found
     if (stage === "TARGET_BUYER_FOUND") {
         const matchedWallets = extraData.map(h => `\`${h.address}\``).join('\n');
         msg = `🚨 **TARGET BUYERS DETECTED** 🚨\n\n` +
@@ -242,7 +293,6 @@ function sendAlert(mintAddress, symbol, stage, extraData = null) {
               `🪐 [Jupiter Swap](https://jup.ag/swap/SOL-${mintAddress})`;
     }
 
-    // Purana alert updated with Mint and Jupiter Swap
     if (stage === "MATURE_PASS") {
         msg = `✅ **PHASE 3: FULLY VERIFIED** ✅\n\n` +
               `🏷️ **${symbol}**\n` +
