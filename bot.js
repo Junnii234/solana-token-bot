@@ -24,10 +24,26 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // ==================== TARGET BUYERS (CABAL) ====================
 const TARGET_BUYERS = [
-    "Adz7E8vLzZ2vR5pM6fT9xY3qN1wS8vH4jK6pL9tY7pUp",
-    "GvP5wR2qT8yN9xZ1mK6fL3jS7vH4jP9tU2bW8mQ4y9tY",
-    "5QzMaBcDeFgHiJkLmNoPqRsTuVwXyZ123456789m9N2",
-    "7xRzU2K8vT9yN4mW6fL1jS3vP5mQ7hK9tL2bW4rS6p9a"
+    "2tgUbS9UMoQD6GkDZBiqKYCURnGrSb6ocYwRABrSJUvY",      # Score: 4/14 (28.6%)
+    "8psNvWTrdNTiVRNzAgsou9kETXNJm2SXZyaKuJraVRtf",      # Score: 4/14 (28.6%)
+    "omegoMAe1AMY5MFKQQr3JwXVy8F4eCvmBAfcpo8X",          # Score: 3/14 (21.4%)
+    "35dszeQQQzkMvjcmyrPWPnN5ZyK9ZjYkNp9kKXZWMvji",      # Score: 2/14 (14.3%)
+    "mP4tnNkwAtRLpSZG5CqcH3CVPJHgVw7XH3j6YRyayQP",      # Score: 2/14 (14.3%)
+    "HV1KXxWFaSeriyFvXyx48FqG9BoFbfinB8njCJonqP7K",      # Score: 2/14 (14.3%)
+    "54Pz1e35z9uoFdnxtzjp7xZQoFiofqhdayQWBMN7",         # Score: 2/14 (14.3%)
+    "52oc72vjNbpUhF7jNE1pPAvc17JwBTyxybFp3u7PvetG",      # Score: 2/14 (14.3%)
+    "AYXW3wur6D9qs2x1sBZ4DvRfMeSdDDG4fhzEbW13",         # Score: 2/14 (14.3%)
+    "Sirius6CrwpvKKokCejugLfjyUcqVPZawScz6DqxWjA",       # Score: 2/14 (14.3%)
+    "73K3hQdUpBFKPMCGmfVWM6vR6b7UNt1Ytfg5Lv5D",         # Score: 2/14 (14.3%)
+    "FoHJUYThke7eXqtCe62zRxTx1uKXkmg3DRvC94JBgVRy",      # Score: 2/14 (14.3%)
+    "CBoKT2eteDiokehKuRfWfE7Caf7A4GBtn3YFEbDfu3DM",      # Score: 2/14 (14.3%)
+    "4xDsmeTWPNjgSVSS1VTfzFq3iHZhp77ffPkAmkZk",         # Score: 2/14 (14.3%)
+    "7iWnBRRhBCiNXXPhqiGzvvBkKrvFSWqqmxRyu9VyYBxE",      # Score: 2/14 (14.3%)
+    "7JCe3GHwkEr3feHgtLXnmuJ1yB3A7coSeyynxTBgdG8k",      # Score: 2/14 (14.3%)
+    "7iVCXQn4u6tiTEfNVqbWSEsRdEi69E9oYsSMiepuECwi",      # Score: 2/14 (14.3%)
+    "4ioQkQWteGibpoCUSV2zadyqkSF4VvnUaGnffGNhsamr",      # Score: 2/14 (14.3%)
+    "9wLN6VkQjhTsGUWGyY3JxqfyEPQAj1yXYXT37oaCzyCx",      # Score: 2/14 (14.3%)
+    "HatjYt6MN1rqkW8NGwJqetPY1QC5kRtBHLoKy2si"           # Score: 2/14 (14.3%)
 ];
 
 // ==================== TRUSTED HOT WALLETS ====================
