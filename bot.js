@@ -32,7 +32,9 @@ const TARGET_BUYERS = [
     "CBoKT2eteDiokehKuRfWfE7Caf7A4GBtn3YFEbDfu3DM", "4xDsmeTWPNjgSVSS1VTfzFq3iHZhp77ffPkAmkZk",
     "7iWnBRRhBCiNXXPhqiGzvvBkKrvFSWqqmxRyu9VyYBxE", "7JCe3GHwkEr3feHgtLXnmuJ1yB3A7coSeyynxTBgdG8k",
     "7iVCXQn4u6tiTEfNVqbWSEsRdEi69E9oYsSMiepuECwi", "4ioQkQWteGibpoCUSV2zadyqkSF4VvnUaGnffGNhsamr",
-    "9wLN6VkQjhTsGUWGyY3JxqfyEPQAj1yXYXT37oaCzyCx", "HatjYt6MN1rqkW8NGwJqetPY1QC5kRtBHLoKy2si"
+    "9wLN6VkQjhTsGUWGyY3JxqfyEPQAj1yXYXT37oaCzyCx", 
+    "DNfuF1L62WWyW3pNakVkyGGFzVVhj4Yr52jSmdTyeBHm",
+    "HatjYt6MN1rqkW8NGwJqetPY1QC5kRtBHLoKy2si"
 ];
 
 // Trusted funders list (Aapki original list)
