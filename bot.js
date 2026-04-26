@@ -16,7 +16,8 @@ const HEADERS = { 'Content-Type': 'application/json' };
 const STAGES = {
     BONDING_CURVE: 'bonding_curve',
     LIQUIDITY_POOL: 'liquidity_pool',
-    MATURE: 'mature'
+    MATURE: 'mature',
+    TARGET_BUYER_CHECK: 'target_buyer_check' // NEW PHASE 4
 };
 
 // ==================== RATE LIMIT PROTECTOR ====================
@@ -24,26 +25,26 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // ==================== TARGET BUYERS (CABAL) ====================
 const TARGET_BUYERS = [
-    "2tgUbS9UMoQD6GkDZBiqKYCURnGrSb6ocYwRABrSJUvY",      # Score: 4/14 (28.6%)
-    "8psNvWTrdNTiVRNzAgsou9kETXNJm2SXZyaKuJraVRtf",      # Score: 4/14 (28.6%)
-    "omegoMAe1AMY5MFKQQr3JwXVy8F4eCvmBAfcpo8X",          # Score: 3/14 (21.4%)
-    "35dszeQQQzkMvjcmyrPWPnN5ZyK9ZjYkNp9kKXZWMvji",      # Score: 2/14 (14.3%)
-    "mP4tnNkwAtRLpSZG5CqcH3CVPJHgVw7XH3j6YRyayQP",      # Score: 2/14 (14.3%)
-    "HV1KXxWFaSeriyFvXyx48FqG9BoFbfinB8njCJonqP7K",      # Score: 2/14 (14.3%)
-    "54Pz1e35z9uoFdnxtzjp7xZQoFiofqhdayQWBMN7",         # Score: 2/14 (14.3%)
-    "52oc72vjNbpUhF7jNE1pPAvc17JwBTyxybFp3u7PvetG",      # Score: 2/14 (14.3%)
-    "AYXW3wur6D9qs2x1sBZ4DvRfMeSdDDG4fhzEbW13",         # Score: 2/14 (14.3%)
-    "Sirius6CrwpvKKokCejugLfjyUcqVPZawScz6DqxWjA",       # Score: 2/14 (14.3%)
-    "73K3hQdUpBFKPMCGmfVWM6vR6b7UNt1Ytfg5Lv5D",         # Score: 2/14 (14.3%)
-    "FoHJUYThke7eXqtCe62zRxTx1uKXkmg3DRvC94JBgVRy",      # Score: 2/14 (14.3%)
-    "CBoKT2eteDiokehKuRfWfE7Caf7A4GBtn3YFEbDfu3DM",      # Score: 2/14 (14.3%)
-    "4xDsmeTWPNjgSVSS1VTfzFq3iHZhp77ffPkAmkZk",         # Score: 2/14 (14.3%)
-    "7iWnBRRhBCiNXXPhqiGzvvBkKrvFSWqqmxRyu9VyYBxE",      # Score: 2/14 (14.3%)
-    "7JCe3GHwkEr3feHgtLXnmuJ1yB3A7coSeyynxTBgdG8k",      # Score: 2/14 (14.3%)
-    "7iVCXQn4u6tiTEfNVqbWSEsRdEi69E9oYsSMiepuECwi",      # Score: 2/14 (14.3%)
-    "4ioQkQWteGibpoCUSV2zadyqkSF4VvnUaGnffGNhsamr",      # Score: 2/14 (14.3%)
-    "9wLN6VkQjhTsGUWGyY3JxqfyEPQAj1yXYXT37oaCzyCx",      # Score: 2/14 (14.3%)
-    "HatjYt6MN1rqkW8NGwJqetPY1QC5kRtBHLoKy2si"           # Score: 2/14 (14.3%)
+    "2tgUbS9UMoQD6GkDZBiqKYCURnGrSb6ocYwRABrSJUvY",      // Score: 4/14 (28.6%)
+    "8psNvWTrdNTiVRNzAgsou9kETXNJm2SXZyaKuJraVRtf",      // Score: 4/14 (28.6%)
+    "omegoMAe1AMY5MFKQQr3JwXVy8F4eCvmBAfcpo8X",          // Score: 3/14 (21.4%)
+    "35dszeQQQzkMvjcmyrPWPnN5ZyK9ZjYkNp9kKXZWMvji",      // Score: 2/14 (14.3%)
+    "mP4tnNkwAtRLpSZG5CqcH3CVPJHgVw7XH3j6YRyayQP",      // Score: 2/14 (14.3%)
+    "HV1KXxWFaSeriyFvXyx48FqG9BoFbfinB8njCJonqP7K",      // Score: 2/14 (14.3%)
+    "54Pz1e35z9uoFdnxtzjp7xZQoFiofqhdayQWBMN7",         // Score: 2/14 (14.3%)
+    "52oc72vjNbpUhF7jNE1pPAvc17JwBTyxybFp3u7PvetG",      // Score: 2/14 (14.3%)
+    "AYXW3wur6D9qs2x1sBZ4DvRfMeSdDDG4fhzEbW13",         // Score: 2/14 (14.3%)
+    "Sirius6CrwpvKKokCejugLfjyUcqVPZawScz6DqxWjA",       // Score: 2/14 (14.3%)
+    "73K3hQdUpBFKPMCGmfVWM6vR6b7UNt1Ytfg5Lv5D",         // Score: 2/14 (14.3%)
+    "FoHJUYThke7eXqtCe62zRxTx1uKXkmg3DRvC94JBgVRy",      // Score: 2/14 (14.3%)
+    "CBoKT2eteDiokehKuRfWfE7Caf7A4GBtn3YFEbDfu3DM",      // Score: 2/14 (14.3%)
+    "4xDsmeTWPNjgSVSS1VTfzFq3iHZhp77ffPkAmkZk",         // Score: 2/14 (14.3%)
+    "7iWnBRRhBCiNXXPhqiGzvvBkKrvFSWqqmxRyu9VyYBxE",      // Score: 2/14 (14.3%)
+    "7JCe3GHwkEr3feHgtLXnmuJ1yB3A7coSeyynxTBgdG8k",      // Score: 2/14 (14.3%)
+    "7iVCXQn4u6tiTEfNVqbWSEsRdEi69E9oYsSMiepuECwi",      // Score: 2/14 (14.3%)
+    "4ioQkQWteGibpoCUSV2zadyqkSF4VvnUaGnffGNhsamr",      // Score: 2/14 (14.3%)
+    "9wLN6VkQjhTsGUWGyY3JxqfyEPQAj1yXYXT37oaCzyCx",      // Score: 2/14 (14.3%)
+    "HatjYt6MN1rqkW8NGwJqetPY1QC5kRtBHLoKy2si"           // Score: 2/14 (14.3%)
 ];
 
 // ==================== TRUSTED HOT WALLETS ====================
@@ -69,8 +70,7 @@ const APPROVED_FUNDERS = [
     "HHYQJpCJAJSuvX6dKuiZgZL6ndu17PpJNWS5PHKKxcuv", "DoAsxPQgiyAxyaJNvpAAUb2ups6rbJRdYrCPyWxwRxBb",
     "DSYq7yD7ewHeDETSWFZZQzPYhGEdtNs1YCu3RduCUHCT", "mt6aMVg1e1ZfsjaqworY628CDiSWLphrtxykjHSwqdj",
     "FWznbcNXWQuHTawe9RxvQ2LdCENssh12dsznf4RiouN5", "3pnE2ZWsRswFRFaWjQ7GhH7hMfzpVhxTRK8SqLFpkfXV",
-    "gasTzr94Pmp4Gf8vknQnqxeYxdgwFjbgdJa4msYRpnB" , 
-    "9obNtb5GyUegcs3a1CbBkLuc5hEWynWfJC6gjz5uWQkE",
+    "gasTzr94Pmp4Gf8vknQnqxeYxdgwFjbgdJa4msYRpnB",  "9obNtb5GyUegcs3a1CbBkLuc5hEWynWfJC6gjz5uWQkE",
     "2snHHreXbpJ7UwZxPe37gnUNf7Wx7wv6UKDSR2JckKuS"
 ];
 
@@ -83,7 +83,7 @@ async function analyzeBondingCurvePhase(creator, mintAddress, symbol) {
     log(`🔍 Phase 1 - Analysing: ${symbol}`);
     
     try {
-        await sleep(500); // Prevent rate limit
+        await sleep(500);
         const balRes = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, method: "getBalance", params: [creator]
         }, { headers: HEADERS });
@@ -94,7 +94,7 @@ async function analyzeBondingCurvePhase(creator, mintAddress, symbol) {
             return false;
         }
 
-        await sleep(500); // Prevent rate limit
+        await sleep(500);
         const sigRes = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [creator, { limit: 10 }]
         }, { headers: HEADERS });
@@ -140,17 +140,8 @@ async function analyzeLiquidityPoolPhase(mintAddress) {
     log(`🔍 Phase 2 - Checking Holders for ${tokenData.symbol}`);
 
     try {
-        // Asli function call jo blockchain se top holders layega
         const holders = await getRealTokenTopHolders(mintAddress);
         
-        // 🎯 TARGET BUYER (CABAL) LOGIC INJECTED HERE
-        const foundTargetBuyers = holders.filter(h => TARGET_BUYERS.includes(h.address));
-        
-        if (foundTargetBuyers.length > 0) {
-            log(`🚨 Target Buyers Found in ${tokenData.symbol}!`);
-            sendAlert(mintAddress, tokenData.symbol, "TARGET_BUYER_FOUND", foundTargetBuyers);
-        }
-
         const creatorHolding = holders.find(h => h.address === tokenData.creator);
         if (creatorHolding && creatorHolding.percentage > 30) {
             reject(`${tokenData.symbol} - Creator holds ${creatorHolding.percentage.toFixed(2)}% (Dump risk)`);
@@ -180,18 +171,47 @@ async function analyzeMaturePhase(mintAddress) {
     log(`🔍 Phase 3 - Mature checks for ${tokenData.symbol}`);
 
     try {
-        // Ye abhi tak placeholder hi hai, agar iski logic chahiye to alag se batayein
         const txPattern = await analyzeTransactionPatterns(mintAddress);
-        if (txPattern.washTrading > 50) return false;
+        if (txPattern.washTrading > 50) {
+            reject(`${tokenData.symbol} - Wash trading detected.`);
+            return false;
+        }
 
         const volumeData = await getVolumeSustainability(mintAddress);
-        if (volumeData.dropRate > 80) return false;
+        if (volumeData.dropRate > 80) {
+            reject(`${tokenData.symbol} - High volume drop rate.`);
+            return false;
+        }
 
         log(`✅ Phase 3 PASS: ${tokenData.symbol}`);
         tokenData.stage = STAGES.MATURE;
         tokenData.matureData = { uniqueTraders: txPattern.uniqueTraders, volumeDrop: volumeData.dropRate, socialScore: 3 };
         return true;
     } catch (e) { return false; }
+}
+
+// ==================== PHASE 4: TARGET BUYER STRICT CHECK ====================
+async function analyzeTargetBuyerPhase(mintAddress) {
+    const tokenData = monitoredTokens.get(mintAddress);
+    if (!tokenData) return { passed: false };
+    log(`🔍 Phase 4 - Strict Target Buyer (Cabal) Check for ${tokenData.symbol}`);
+
+    try {
+        const holders = await getRealTokenTopHolders(mintAddress);
+        const foundTargetBuyers = holders.filter(h => TARGET_BUYERS.includes(h.address));
+        
+        if (foundTargetBuyers.length > 0) {
+            log(`🎯 Phase 4 PASS: Target Buyers Found in ${tokenData.symbol}!`);
+            tokenData.stage = STAGES.TARGET_BUYER_CHECK;
+            return { passed: true, matchedWallets: foundTargetBuyers };
+        } else {
+            reject(`${tokenData.symbol} - Phase 4 FAILED: No Target Buyers from list found.`);
+            return { passed: false };
+        }
+    } catch (e) {
+        log(`❌ Error in Phase 4 Target Buyer Check: ${e.message}`);
+        return { passed: false };
+    }
 }
 
 // ==================== MAIN WORKFLOW MANAGER ====================
@@ -201,7 +221,7 @@ async function processPipeline(mintAddress, creator, symbol, currentStage) {
         if (passed) {
             setTimeout(() => {
                 processPipeline(mintAddress, creator, symbol, STAGES.LIQUIDITY_POOL);
-            }, 300000); 
+            }, 300000); // 5 mins delay
         }
     } 
     else if (currentStage === STAGES.LIQUIDITY_POOL) {
@@ -209,13 +229,23 @@ async function processPipeline(mintAddress, creator, symbol, currentStage) {
         if (passed) {
             setTimeout(() => {
                 processPipeline(mintAddress, creator, symbol, STAGES.MATURE);
-            }, 1800000); 
+            }, 1800000); // 30 mins delay
         }
     }
     else if (currentStage === STAGES.MATURE) {
         const passed = await analyzeMaturePhase(mintAddress);
         if (passed) {
-            sendAlert(mintAddress, symbol, "MATURE_PASS");
+            // Proceed to Strict Phase 4 immediately after Phase 3 passes
+            setTimeout(() => {
+                processPipeline(mintAddress, creator, symbol, STAGES.TARGET_BUYER_CHECK);
+            }, 5000); // 5 sec delay before final check
+        }
+    }
+    else if (currentStage === STAGES.TARGET_BUYER_CHECK) {
+        // Strict Check: Only trigger Telegram Alert if Phase 4 passes
+        const result = await analyzeTargetBuyerPhase(mintAddress);
+        if (result.passed) {
+            sendAlert(mintAddress, symbol, result.matchedWallets);
         }
     }
 }
@@ -251,10 +281,9 @@ async function checkBasicRugHistory(creator) {
     } catch (e) { return { isRugger: false, count: 0 }; }
 }
 
-// 🚀 NAYA FUNCTION: Jo sach mein Blockchain se holders nikalega
 async function getRealTokenTopHolders(mintAddress) { 
     try {
-        await sleep(1000); // RPC load bachane ke liye
+        await sleep(1000); 
         const res = await axios.post(HELIUS_RPC, {
             jsonrpc: "2.0", id: 1, method: "getTokenLargestAccounts", params: [mintAddress]
         }, { headers: HEADERS });
@@ -263,11 +292,10 @@ async function getRealTokenTopHolders(mintAddress) {
         if (accounts.length === 0) return [];
 
         let holders = [];
-        // Top 15 accounts ka owner aur percentage nikal rahe hain
         for (let i = 0; i < Math.min(accounts.length, 15); i++) {
             const acc = accounts[i];
             
-            await sleep(300); // 429 Error se bachne ke liye gap
+            await sleep(300); 
             const accInfo = await axios.post(HELIUS_RPC, {
                 jsonrpc: "2.0", id: 1, method: "getAccountInfo", params: [acc.address, { encoding: "jsonParsed" }]
             }, { headers: HEADERS });
@@ -277,7 +305,6 @@ async function getRealTokenTopHolders(mintAddress) {
             
             holders.push({ 
                 address: ownerAddress, 
-                // Assumed Total Supply for Pump is 1 Billion
                 percentage: (acc.uiAmount / 1000000000) * 100 
             });
         }
@@ -288,45 +315,36 @@ async function getRealTokenTopHolders(mintAddress) {
     } 
 }
 
-// Placeholder APIs for Phase 3 (You can update these later with real logic)
+// Placeholder APIs for Phase 3
 async function analyzeTransactionPatterns(mintAddress) { return { uniqueTraders: 50, washTrading: 15 }; }
 async function getVolumeSustainability(mintAddress) { return { currentVolume: 100000, dropRate: 30 }; }
 
 
-// ==================== ALERT SYSTEM ====================
-function sendAlert(mintAddress, symbol, stage, extraData = null) {
+// ==================== FINAL ALERT SYSTEM ====================
+function sendAlert(mintAddress, symbol, matchedWallets) {
     const tokenData = monitoredTokens.get(mintAddress);
     if (!tokenData) return;
 
-    let msg = '';
+    // Ab Telegram alert sirf tab hi generate hoga jab Phase 4 (Target Buyer) confirm ho jaye
+    const matchedWalletsText = matchedWallets.map(h => `\`${h.address}\` (${h.percentage.toFixed(2)}%)`).join('\n');
     
-    if (stage === "TARGET_BUYER_FOUND") {
-        const matchedWallets = extraData.map(h => `\`${h.address}\``).join('\n');
-        msg = `🚨 **TARGET BUYERS DETECTED** 🚨\n\n` +
-              `🏷️ **${symbol}**\n` +
-              `📝 **Mint:** \`${mintAddress}\`\n\n` +
-              `👀 **Found in Top Holders:**\n${matchedWallets}\n\n` +
-              `🔗 [DexScreener](https://dexscreener.com/solana/${mintAddress})\n` +
-              `🪐 [Jupiter Swap](https://jup.ag/swap/SOL-${mintAddress})`;
-    }
+    const msg = `🚨 **ULTIMATE CONFIRMATION: CABAL DETECTED** 🚨\n\n` +
+                `🏷️ **Token:** ${symbol}\n` +
+                `📝 **Mint:** \`${mintAddress}\`\n\n` +
+                `✅ Passed Phase 1: Bonding Curve\n` +
+                `✅ Passed Phase 2: Liquidity Pool Check\n` +
+                `✅ Passed Phase 3: Volume Mature\n` +
+                `🎯 **Passed Phase 4: TARGET BUYERS FOUND!**\n\n` +
+                `👀 **Matched Insider Wallets:**\n${matchedWalletsText}\n\n` +
+                `🔗 [DexScreener](https://dexscreener.com/solana/${mintAddress})\n` +
+                `🪐 [Jupiter Swap](https://jup.ag/swap/SOL-${mintAddress})`;
 
-    if (stage === "MATURE_PASS") {
-        msg = `✅ **PHASE 3: FULLY VERIFIED** ✅\n\n` +
-              `🏷️ **${symbol}**\n` +
-              `📝 **Mint:** \`${mintAddress}\`\n\n` +
-              `🎯 **Low Risk - Stable Volume Confirmed**\n\n` +
-              `🔗 [DexScreener](https://dexscreener.com/solana/${mintAddress})\n` +
-              `🪐 [Jupiter Swap](https://jup.ag/swap/SOL-${mintAddress})`;
-    }
-
-    if (msg) {
-        bot.sendMessage(TELEGRAM_CHAT_ID, msg, { parse_mode: 'Markdown', disable_web_page_preview: true });
-    }
+    bot.sendMessage(TELEGRAM_CHAT_ID, msg, { parse_mode: 'Markdown', disable_web_page_preview: true });
 }
 
 // ==================== MAIN START ====================
 function start() {
-    log("🤖 Smart Pump.Fun Bot Started - Linear Pipeline Active");
+    log("🤖 Smart Pump.Fun Bot Started - Strict Phase 4 Pipeline Active");
     const ws = new WebSocket('wss://pumpportal.fun/api/data');
 
     ws.on('open', () => ws.send(JSON.stringify({ "method": "subscribeNewToken" })));
