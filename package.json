@@ -2,6 +2,7 @@
   "name": "bot",
   "version": "5.0.0",
   "description": "Elite Solana Token Scanner (Pump.fun + Raydium AMM V4 + CLMM)",
+  "type": "module",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js",
