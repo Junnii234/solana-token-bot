@@ -1,7 +1,11 @@
-require('dotenv').config();
-const TelegramBot = require('node-telegram-bot-api');
-const axios = require('axios');
-const WebSocket = require('ws');
+import dotenv from 'dotenv';
+dotenv.config();
+import TelegramBot from 'node-telegram-bot-api';
+import axios from 'axios';
+import WebSocket from 'ws';
+
+// Baqi ka saara code bilkul waisa hi rahega...
+
 
 // ==================== CONFIG ====================
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || "8758743414:AAEKc_ORnq15WQHIR1jbKqh7psZfUcSCAcQ";
