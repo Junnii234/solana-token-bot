@@ -1,29 +1,36 @@
-Require('dotenv').config();
-const TelegramBot = require('node-telegram-bot-api');
-const axios = require('axios');
-const WebSocket = require('ws');
+// ==================== IMPORTS ====================
+import dotenv from 'dotenv';
+import TelegramBot from 'node-telegram-bot-api';
+import axios from 'axios';
+import WebSocket from 'ws';
+
+dotenv.config();
 
 // ==================== CONFIG ====================
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || "8758743414:AAEKc_ORnq15WQHIR1jbKqh7psZfUcSCAcQ";
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || "8006731872";
-const HELIUS_RPC = `https://mainnet.helius-rpc.com/?api-key=e7b6c520-7109-4d90-b585-b2ff000b20f8`;
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 
+if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID || !HELIUS_API_KEY) {
+    console.error("❌ Missing ENV variables");
+    process.exit(1);
+}
+
+const HELIUS_RPC = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`;
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
-const monitoredTokens = new Map(); 
+
+const monitoredTokens = new Map();
+const walletClusters = new Map();
+
 const HEADERS = { 'Content-Type': 'application/json' };
 
-// ==================== STAGES ====================
-const STAGES = {
-    BONDING_CURVE: 'bonding_curve',
-    LIQUIDITY_POOL: 'liquidity_pool',
-    MATURE: 'mature',
-    TARGET_BUYER_CHECK: 'target_buyer_check' // NEW PHASE 4
-};
+// ==================== UTILS ====================
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const log = (msg) => console.log(`[${new Date().toLocaleTimeString()}] 🟢 ${msg}`);
+const warn = (msg) => console.log(`[${new Date().toLocaleTimeString()}] ⚠️ ${msg}`);
+const rejectLog = (msg) => console.log(`[${new Date().toLocaleTimeString()}] 🔴 ${msg}`);
 
-// ==================== RATE LIMIT PROTECTOR ====================
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-// ==================== TARGET BUYERS (CABAL) ====================
+// ==================== FULL TARGET BUYERS ====================
 const TARGET_BUYERS = [
     "2tgUbS9UMoQD6GkDZBiqKYCURnGrSb6ocYwRABrSJUvY",      // Score: 4/14 (28.6%)
     "8psNvWTrdNTiVRNzAgsou9kETXNJm2SXZyaKuJraVRtf",      // Score: 4/14 (28.6%)
@@ -74,299 +81,169 @@ const APPROVED_FUNDERS = [
     "2snHHreXbpJ7UwZxPe37gnUNf7Wx7wv6UKDSR2JckKuS"
 ];
 
-const log = (msg) => console.log(`[${new Date().toLocaleTimeString()}] 🟢 ${msg}`);
-const warn = (msg) => console.log(`[${new Date().toLocaleTimeString()}] ⚠️ ${msg}`);
-const reject = (reason) => console.log(`[${new Date().toLocaleTimeString()}] 🔴 REJECT: ${reason}`);
 
-// ==================== PHASE 1: BONDING CURVE CHECKS ====================
-async function analyzeBondingCurvePhase(creator, mintAddress, symbol) {
-    log(`🔍 Phase 1 - Analysing: ${symbol}`);
-    
+// ==================== RPC ====================
+async function heliusRequest(method, params) {
     try {
-        await sleep(500);
-        const balRes = await axios.post(HELIUS_RPC, {
-            jsonrpc: "2.0", id: 1, method: "getBalance", params: [creator]
-        }, { headers: HEADERS });
-        
-        const balance = (balRes.data.result?.value || 0) / 1e9;
-        if (balance < 0.2) {
-            reject(`${symbol} - Low creator balance: ${balance.toFixed(3)} SOL`);
-            return false;
-        }
-
-        await sleep(500);
-        const sigRes = await axios.post(HELIUS_RPC, {
-            jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [creator, { limit: 10 }]
-        }, { headers: HEADERS });
-
-        const txs = sigRes.data.result || [];
-        if (txs.length === 0) return false;
-
-        const oldestTx = txs[txs.length - 1];
-        const funder = await getFundingSource(oldestTx.signature, creator);
-        
-        if (!APPROVED_FUNDERS.includes(funder)) {
-            reject(`${symbol} - Untrusted funder`);
-            return false;
-        }
-
-        const rugCheck = await checkBasicRugHistory(creator);
-        if (rugCheck.isRugger) {
-            reject(`${symbol} - Serial rugger (${rugCheck.count} dead tokens)`);
-            return false;
-        }
-
-        log(`✅ Phase 1 PASS: ${symbol}`);
-        monitoredTokens.set(mintAddress, {
-            stage: STAGES.BONDING_CURVE,
-            lastCheck: Date.now(),
-            creator,
-            symbol,
-            initialBalance: balance,
-            funder
-        });
-        
-        return true;
-    } catch (e) {
-        if (e.response && e.response.status === 429) log(`⚠️ Helius Rate Limit Hit in Phase 1`);
-        return false;
-    }
-}
-
-// ==================== PHASE 2: LIQUIDITY POOL CHECKS ====================
-async function analyzeLiquidityPoolPhase(mintAddress) {
-    const tokenData = monitoredTokens.get(mintAddress);
-    if (!tokenData) return false;
-    log(`🔍 Phase 2 - Checking Holders for ${tokenData.symbol}`);
-
-    try {
-        const holders = await getRealTokenTopHolders(mintAddress);
-        
-        const creatorHolding = holders.find(h => h.address === tokenData.creator);
-        if (creatorHolding && creatorHolding.percentage > 30) {
-            reject(`${tokenData.symbol} - Creator holds ${creatorHolding.percentage.toFixed(2)}% (Dump risk)`);
-            return false;
-        }
-
-        const top10Percent = holders.slice(0, 10).reduce((sum, h) => sum + h.percentage, 0);
-        if (top10Percent > 70) {
-            reject(`${tokenData.symbol} - Top 10 hold ${top10Percent.toFixed(2)}% (Too concentrated)`);
-            return false;
-        }
-
-        log(`✅ Phase 2 PASS: ${tokenData.symbol}`);
-        tokenData.stage = STAGES.LIQUIDITY_POOL;
-        tokenData.holderData = { top10Percentage: top10Percent, lpLocked: true };
-        return true;
-    } catch (e) { 
-        if (e.response && e.response.status === 429) log(`⚠️ Helius Rate Limit Hit in Phase 2`);
-        return false; 
-    }
-}
-
-// ==================== PHASE 3: MATURE TOKEN CHECKS ====================
-async function analyzeMaturePhase(mintAddress) {
-    const tokenData = monitoredTokens.get(mintAddress);
-    if (!tokenData) return false;
-    log(`🔍 Phase 3 - Mature checks for ${tokenData.symbol}`);
-
-    try {
-        const txPattern = await analyzeTransactionPatterns(mintAddress);
-        if (txPattern.washTrading > 50) {
-            reject(`${tokenData.symbol} - Wash trading detected.`);
-            return false;
-        }
-
-        const volumeData = await getVolumeSustainability(mintAddress);
-        if (volumeData.dropRate > 80) {
-            reject(`${tokenData.symbol} - High volume drop rate.`);
-            return false;
-        }
-
-        log(`✅ Phase 3 PASS: ${tokenData.symbol}`);
-        tokenData.stage = STAGES.MATURE;
-        tokenData.matureData = { uniqueTraders: txPattern.uniqueTraders, volumeDrop: volumeData.dropRate, socialScore: 3 };
-        return true;
-    } catch (e) { return false; }
-}
-
-// ==================== PHASE 4: TARGET BUYER STRICT CHECK ====================
-async function analyzeTargetBuyerPhase(mintAddress) {
-    const tokenData = monitoredTokens.get(mintAddress);
-    if (!tokenData) return { passed: false };
-    log(`🔍 Phase 4 - Strict Target Buyer (Cabal) Check for ${tokenData.symbol}`);
-
-    try {
-        const holders = await getRealTokenTopHolders(mintAddress);
-        const foundTargetBuyers = holders.filter(h => TARGET_BUYERS.includes(h.address));
-        
-        if (foundTargetBuyers.length > 0) {
-            log(`🎯 Phase 4 PASS: Target Buyers Found in ${tokenData.symbol}!`);
-            tokenData.stage = STAGES.TARGET_BUYER_CHECK;
-            return { passed: true, matchedWallets: foundTargetBuyers };
-        } else {
-            reject(`${tokenData.symbol} - Phase 4 FAILED: No Target Buyers from list found.`);
-            return { passed: false };
-        }
-    } catch (e) {
-        log(`❌ Error in Phase 4 Target Buyer Check: ${e.message}`);
-        return { passed: false };
-    }
-}
-
-// ==================== MAIN WORKFLOW MANAGER ====================
-async function processPipeline(mintAddress, creator, symbol, currentStage) {
-    if (currentStage === STAGES.BONDING_CURVE) {
-        const passed = await analyzeBondingCurvePhase(creator, mintAddress, symbol);
-        if (passed) {
-            setTimeout(() => {
-                processPipeline(mintAddress, creator, symbol, STAGES.LIQUIDITY_POOL);
-            }, 300000); // 5 mins delay
-        }
-    } 
-    else if (currentStage === STAGES.LIQUIDITY_POOL) {
-        const passed = await analyzeLiquidityPoolPhase(mintAddress);
-        if (passed) {
-            setTimeout(() => {
-                processPipeline(mintAddress, creator, symbol, STAGES.MATURE);
-            }, 1800000); // 30 mins delay
-        }
-    }
-    else if (currentStage === STAGES.MATURE) {
-        const passed = await analyzeMaturePhase(mintAddress);
-        if (passed) {
-            // Proceed to Strict Phase 4 immediately after Phase 3 passes
-            setTimeout(() => {
-                processPipeline(mintAddress, creator, symbol, STAGES.TARGET_BUYER_CHECK);
-            }, 5000); // 5 sec delay before final check
-        }
-    }
-    else if (currentStage === STAGES.TARGET_BUYER_CHECK) {
-        // Strict Check: Only trigger Telegram Alert if Phase 4 passes
-        const result = await analyzeTargetBuyerPhase(mintAddress);
-        if (result.passed) {
-            sendAlert(mintAddress, symbol, result.matchedWallets);
-        }
-    }
-}
-
-// ==================== HELPER FUNCTIONS ====================
-async function getFundingSource(signature, creator) {
-    try {
-        await sleep(500);
-        const txRes = await axios.post(HELIUS_RPC, {
-            jsonrpc: "2.0", id: 1, method: "getTransaction", params: [signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }]
-        }, { headers: HEADERS });
-        for (const ix of txRes.data.result?.transaction?.message?.instructions || []) {
-            if (ix.program === "system" && ix.parsed?.type === "transfer" && ix.parsed.info.destination === creator) {
-                return ix.parsed.info.source;
-            }
-        }
-        return "Unknown";
-    } catch (e) { return "Error"; }
-}
-
-async function checkBasicRugHistory(creator) {
-    try {
-        await sleep(500);
         const res = await axios.post(HELIUS_RPC, {
-            jsonrpc: "2.0", id: 1, method: "getTokenAccountsByOwner",
-            params: [creator, { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" }, { encoding: "jsonParsed" }]
+            jsonrpc: "2.0",
+            id: 1,
+            method,
+            params
         }, { headers: HEADERS });
-        let dumpedCount = 0;
-        (res.data.result?.value || []).forEach(acc => {
-            if (acc.account.data.parsed.info.tokenAmount.uiAmount <= 0.000001) dumpedCount++;
-        });
-        return { isRugger: dumpedCount > 10, count: dumpedCount };
-    } catch (e) { return { isRugger: false, count: 0 }; }
-}
 
-async function getRealTokenTopHolders(mintAddress) { 
-    try {
-        await sleep(1000); 
-        const res = await axios.post(HELIUS_RPC, {
-            jsonrpc: "2.0", id: 1, method: "getTokenLargestAccounts", params: [mintAddress]
-        }, { headers: HEADERS });
-        
-        const accounts = res.data.result?.value || [];
-        if (accounts.length === 0) return [];
-
-        let holders = [];
-        for (let i = 0; i < Math.min(accounts.length, 15); i++) {
-            const acc = accounts[i];
-            
-            await sleep(300); 
-            const accInfo = await axios.post(HELIUS_RPC, {
-                jsonrpc: "2.0", id: 1, method: "getAccountInfo", params: [acc.address, { encoding: "jsonParsed" }]
-            }, { headers: HEADERS });
-
-            const parsedData = accInfo.data.result?.value?.data?.parsed;
-            const ownerAddress = parsedData?.info?.owner || acc.address;
-            
-            holders.push({ 
-                address: ownerAddress, 
-                percentage: (acc.uiAmount / 1000000000) * 100 
-            });
-        }
-        return holders;
+        return res.data.result;
     } catch (e) {
-        log(`❌ Holder fetch failed: ${e.message}`);
-        return []; 
-    } 
+        if (e.response?.status === 429) {
+            warn("Rate limit retry...");
+            await sleep(1000);
+            return heliusRequest(method, params);
+        }
+        return null;
+    }
 }
 
-// Placeholder APIs for Phase 3
-async function analyzeTransactionPatterns(mintAddress) { return { uniqueTraders: 50, washTrading: 15 }; }
-async function getVolumeSustainability(mintAddress) { return { currentVolume: 100000, dropRate: 30 }; }
-
-
-// ==================== FINAL ALERT SYSTEM ====================
-function sendAlert(mintAddress, symbol, matchedWallets) {
-    const tokenData = monitoredTokens.get(mintAddress);
-    if (!tokenData) return;
-
-    // Ab Telegram alert sirf tab hi generate hoga jab Phase 4 (Target Buyer) confirm ho jaye
-    const matchedWalletsText = matchedWallets.map(h => `\`${h.address}\` (${h.percentage.toFixed(2)}%)`).join('\n');
-    
-    const msg = `🚨 **ULTIMATE CONFIRMATION: CABAL DETECTED** 🚨\n\n` +
-                `🏷️ **Token:** ${symbol}\n` +
-                `📝 **Mint:** \`${mintAddress}\`\n\n` +
-                `✅ Passed Phase 1: Bonding Curve\n` +
-                `✅ Passed Phase 2: Liquidity Pool Check\n` +
-                `✅ Passed Phase 3: Volume Mature\n` +
-                `🎯 **Passed Phase 4: TARGET BUYERS FOUND!**\n\n` +
-                `👀 **Matched Insider Wallets:**\n${matchedWalletsText}\n\n` +
-                `🔗 [DexScreener](https://dexscreener.com/solana/${mintAddress})\n` +
-                `🪐 [Jupiter Swap](https://jup.ag/swap/SOL-${mintAddress})`;
-
-    bot.sendMessage(TELEGRAM_CHAT_ID, msg, { parse_mode: 'Markdown', disable_web_page_preview: true });
+// ==================== CLUSTER ====================
+function addToCluster(funder, wallet) {
+    if (!walletClusters.has(funder)) {
+        walletClusters.set(funder, new Set());
+    }
+    walletClusters.get(funder).add(wallet);
 }
 
-// ==================== MAIN START ====================
+function getClusterScore(funder) {
+    const cluster = walletClusters.get(funder);
+    return cluster ? Math.min(cluster.size * 5, 30) : 0;
+}
+
+// ==================== DEV HISTORY ====================
+async function analyzeDevHistory(creator) {
+    const res = await heliusRequest("getTokenAccountsByOwner", [
+        creator,
+        { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
+        { encoding: "jsonParsed" }
+    ]);
+
+    let total = 0, dead = 0;
+
+    for (const acc of res?.value || []) {
+        total++;
+        const amt = acc.account.data.parsed.info.tokenAmount.uiAmount;
+        if (amt <= 0.000001) dead++;
+    }
+
+    return {
+        totalTokens: total,
+        deadTokens: dead,
+        successRate: total ? ((total - dead) / total) * 100 : 0
+    };
+}
+
+// ==================== HOLDERS ====================
+async function getTopHolders(mint) {
+    const res = await heliusRequest("getTokenLargestAccounts", [mint]);
+    if (!res?.value) return [];
+
+    return res.value.slice(0, 10).map(a => ({
+        address: a.address,
+        percentage: a.uiAmount
+    }));
+}
+
+// ==================== PHASE 1 ====================
+async function phase1(creator, mint, symbol) {
+    const bal = await heliusRequest("getBalance", [creator]);
+    const balance = (bal?.value || 0) / 1e9;
+
+    if (balance < 0.2) return false;
+
+    const dev = await analyzeDevHistory(creator);
+
+    monitoredTokens.set(mint, { creator, symbol, dev });
+
+    log(`✅ Phase1 ${symbol}`);
+    return true;
+}
+
+// ==================== PHASE 4 ====================
+async function phase4(mint) {
+    const token = monitoredTokens.get(mint);
+    if (!token) return;
+
+    const holders = await getTopHolders(mint);
+
+    const matched = holders.filter(h => TARGET_BUYERS.includes(h.address));
+
+    let clusterScore = 0;
+    for (const h of holders) {
+        const f = h.address.slice(0, 6);
+        addToCluster(f, h.address);
+        clusterScore += getClusterScore(f);
+    }
+
+    let score = clusterScore + matched.length * 20;
+
+    if (token.dev.successRate > 50) score += 20;
+    if (token.dev.deadTokens > 10) score -= 20;
+
+    if (score < 40) {
+        rejectLog(`${token.symbol} weak`);
+        return;
+    }
+
+    sendAlert(mint, token.symbol, score, matched);
+}
+
+// ==================== ALERT ====================
+function sendAlert(mint, symbol, score, wallets) {
+    const list = wallets.map(w => `\`${w.address}\``).join("\n");
+
+    bot.sendMessage(TELEGRAM_CHAT_ID, `
+🚨 INSIDER ALERT 🚨
+
+Token: ${symbol}
+Mint: ${mint}
+
+Score: ${score}
+
+Wallets:
+${list}
+
+https://dexscreener.com/solana/${mint}
+`, { parse_mode: 'Markdown' });
+}
+
+// ==================== PIPELINE ====================
+async function process(mint, creator, symbol) {
+    const ok = await phase1(creator, mint, symbol);
+    if (!ok) return;
+
+    setTimeout(() => phase4(mint), 30000);
+}
+
+// ==================== START ====================
 function start() {
-    log("🤖 Smart Pump.Fun Bot Started - Strict Phase 4 Pipeline Active");
+    log("🚀 BOT LIVE");
+
     const ws = new WebSocket('wss://pumpportal.fun/api/data');
 
-    ws.on('open', () => ws.send(JSON.stringify({ "method": "subscribeNewToken" })));
+    ws.on('open', () => {
+        ws.send(JSON.stringify({ method: "subscribeNewToken" }));
+    });
 
     ws.on('message', async (data) => {
         try {
-            const event = JSON.parse(data.toString());
-            if (event.mint && event.traderPublicKey && event.symbol && !monitoredTokens.has(event.mint)) {
-                processPipeline(event.mint, event.traderPublicKey, event.symbol, STAGES.BONDING_CURVE);
+            const e = JSON.parse(data.toString());
+
+            if (e.mint && e.traderPublicKey && e.symbol) {
+                if (!monitoredTokens.has(e.mint)) {
+                    process(e.mint, e.traderPublicKey, e.symbol);
+                }
             }
-        } catch (e) {}
+        } catch {}
     });
 
     ws.on('close', () => setTimeout(start, 5000));
 }
-
-// Memory Cleanup
-setInterval(() => {
-    const cutoff = Date.now() - 86400000;
-    for (const [mint, data] of monitoredTokens.entries()) {
-        if (data.lastCheck < cutoff) monitoredTokens.delete(mint);
-    }
-}, 3600000); 
 
 start();
